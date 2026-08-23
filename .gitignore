@@ -1,0 +1,26 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# macOS
+.DS_Store
+
+# Node
+frontend/node_modules/
+frontend/dist/
+
+# Environment
+.env
+.env.*
+
+# Large model files
+models/medgemma-1.5-4b-it/
+*.safetensors
+*.bin
+*.pt
+*.pth
+
+# Data
+data/*
+!data/sample/
