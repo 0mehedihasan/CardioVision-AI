@@ -1840,6 +1840,938 @@
 }
 
 /* ==================================================
+   BANNERS
+
+   Surface real backend failures instead of hiding them.
+   ================================================== */
+
+.cv-banner {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+
+  margin-bottom: var(--sp-6);
+  padding: var(--sp-3) var(--sp-4);
+
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: #fff;
+
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+.cv-banner strong {
+  flex-shrink: 0;
+
+  color: var(--ink);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.cv-banner span {
+  flex: 1;
+  min-width: 200px;
+  color: var(--text);
+}
+
+.cv-banner .cv-secondary-button {
+  height: 30px;
+  padding: 0 var(--sp-3);
+  font-size: 10.5px;
+}
+
+.cv-banner.error {
+  border-color: #eccccc;
+  background: var(--danger-tint);
+}
+
+.cv-banner.error strong {
+  color: var(--danger);
+}
+
+.cv-banner.warning {
+  border-color: #e8d5ae;
+  background: var(--warning-tint);
+}
+
+.cv-banner.warning strong {
+  color: var(--warning);
+}
+
+/* --------------------------------------------------
+   OFFLINE / UNAVAILABLE STATES
+-------------------------------------------------- */
+
+.cv-header-center.offline .cv-system-dot {
+  background: var(--danger);
+  box-shadow: 0 0 0 3px var(--danger-tint);
+}
+
+.cv-local-badge.offline {
+  border-color: var(--line-strong);
+  background: var(--surface-raised);
+  color: var(--muted);
+}
+
+.cv-local-badge.offline span {
+  background: var(--soft);
+  box-shadow: none;
+}
+
+/* Tabs for modalities with no model get a small hollow marker. */
+
+.cv-tabs button.pending {
+  color: var(--soft);
+}
+
+.cv-tab-dot {
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  margin-left: var(--sp-2);
+  vertical-align: middle;
+
+  border: 1px solid var(--line-strong);
+  border-radius: 50%;
+}
+
+.cv-inline-badge {
+  margin-left: var(--sp-2);
+  padding: 1px 5px;
+
+  border: 1px solid var(--line-strong);
+  border-radius: 3px;
+  background: var(--surface-raised);
+
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 8.5px;
+  font-weight: 500;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.cv-modality-row.unsupported .cv-modality-icon {
+  background: var(--surface-raised);
+  color: var(--soft);
+}
+
+.cv-metric.muted strong,
+.cv-finding.muted strong,
+.cv-finding.muted span {
+  color: var(--soft);
+}
+
+.cv-finding.muted .cv-finding-check {
+  color: var(--soft);
+}
+
+.cv-muted-text {
+  margin: var(--sp-2) 0 var(--sp-3);
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.cv-form-note {
+  padding: var(--sp-3);
+
+  border: 1px solid var(--line);
+  border-left: 2px solid var(--line-strong);
+  border-radius: 0 var(--r-sm) var(--r-sm) 0;
+  background: var(--surface);
+
+  color: var(--muted);
+  font-size: 10.5px;
+  line-height: 1.6;
+}
+
+/* ==================================================
+   ECHO RESULT
+   ================================================== */
+
+.cv-echo-result {
+  display: grid;
+  grid-template-columns: minmax(340px, 1fr) minmax(320px, 1fr);
+  gap: var(--sp-4);
+  align-items: start;
+}
+
+.cv-echo-visual {
+  overflow: hidden;
+
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background: var(--paper);
+  box-shadow: var(--shadow-sm);
+}
+
+.cv-echo-viewtabs {
+  display: flex;
+  gap: 2px;
+  overflow-x: auto;
+
+  padding: var(--sp-2) var(--sp-3) 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.cv-echo-viewtabs button {
+  padding: var(--sp-2) var(--sp-3);
+
+  border: 0;
+  border-bottom: 2px solid transparent;
+
+  background: transparent;
+  color: var(--muted);
+
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+
+  transition: color 150ms var(--ease), border-color 150ms var(--ease);
+}
+
+.cv-echo-viewtabs button:hover {
+  color: var(--ink);
+}
+
+.cv-echo-viewtabs button.active {
+  border-bottom-color: var(--accent);
+  color: var(--accent-strong);
+  font-weight: 500;
+}
+
+/* The frame is dark: ultrasound reads correctly against black. */
+
+.cv-echo-image-frame {
+  display: grid;
+  place-items: center;
+
+  aspect-ratio: 1 / 1;
+  overflow: hidden;
+
+  background: #0b0f12;
+}
+
+.cv-echo-image-frame img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+
+  /* Keep class boundaries crisp rather than smeared by the browser. */
+  image-rendering: pixelated;
+}
+
+.cv-echo-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-3);
+
+  padding: var(--sp-3) var(--sp-4);
+  border-top: 1px solid var(--line);
+}
+
+.cv-echo-legend span {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+
+  color: var(--muted);
+  font-size: 10.5px;
+}
+
+.cv-echo-legend i {
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+}
+
+.cv-echo-caption {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+
+  padding: 0 var(--sp-4) var(--sp-4);
+}
+
+.cv-echo-caption strong {
+  color: var(--ink);
+  font-size: 11px;
+}
+
+.cv-echo-caption span {
+  color: var(--muted);
+  font-size: 10.5px;
+  line-height: 1.6;
+}
+
+/* --------------------------------------------------
+   ECHO DETAIL COLUMN
+-------------------------------------------------- */
+
+.cv-echo-detail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  min-width: 0;
+}
+
+.cv-echo-block {
+  padding: var(--sp-4);
+
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background: var(--paper);
+  box-shadow: var(--shadow-sm);
+}
+
+.cv-echo-block > .cv-card-kicker {
+  margin-bottom: var(--sp-3);
+}
+
+.cv-echo-block .cv-metric-grid {
+  grid-template-columns: repeat(2, 1fr);
+}
+
+/* --------------------------------------------------
+   STRUCTURE TABLE
+-------------------------------------------------- */
+
+.cv-structure-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.cv-structure-table th {
+  padding: 0 0 var(--sp-2);
+  border-bottom: 1px solid var(--line);
+
+  color: var(--soft);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 500;
+  letter-spacing: 0.05em;
+  text-align: left;
+  text-transform: uppercase;
+}
+
+.cv-structure-table th:not(:first-child),
+.cv-structure-table td:not(:first-child) {
+  text-align: right;
+}
+
+.cv-structure-table td {
+  padding: var(--sp-3) 0;
+  border-bottom: 1px solid var(--line);
+
+  color: var(--ink);
+  font-size: 11.5px;
+}
+
+.cv-structure-table td:not(:first-child) {
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.cv-structure-table tr:last-child td {
+  border-bottom: 0;
+}
+
+.cv-structure-table tr.absent td {
+  color: var(--soft);
+}
+
+.cv-structure-table tr.absent .cv-structure-dot {
+  opacity: 0.3;
+}
+
+.cv-structure-dot {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  margin-right: var(--sp-2);
+  vertical-align: baseline;
+
+  border-radius: 2px;
+}
+
+.cv-echo-warning {
+  margin-top: var(--sp-3);
+  padding: var(--sp-3);
+
+  border: 1px solid #e8d5ae;
+  border-radius: var(--r-sm);
+  background: var(--warning-tint);
+
+  color: #7d4f0b;
+  font-size: 10.5px;
+  line-height: 1.6;
+}
+
+/* --------------------------------------------------
+   MODEL CARD
+-------------------------------------------------- */
+
+.cv-model-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--sp-3);
+}
+
+.cv-model-grid > div {
+  min-width: 0;
+}
+
+.cv-model-grid span {
+  display: block;
+  margin-bottom: 2px;
+
+  color: var(--soft);
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.cv-model-grid strong {
+  display: block;
+  overflow: hidden;
+
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The note that stops test Dice being read as per-case confidence. */
+
+.cv-metrics-note {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+
+  margin: var(--sp-4) 0 var(--sp-3);
+  padding: var(--sp-3);
+
+  border-left: 2px solid var(--accent-line);
+  border-radius: 0 var(--r-sm) var(--r-sm) 0;
+  background: var(--accent-tint);
+}
+
+.cv-metrics-note strong {
+  color: var(--accent-strong);
+  font-size: 10.5px;
+  font-weight: 600;
+}
+
+.cv-metrics-note span {
+  color: #3f5c58;
+  font-size: 10.5px;
+  line-height: 1.6;
+}
+
+/* --------------------------------------------------
+   PER-CLASS DICE
+-------------------------------------------------- */
+
+.cv-perclass {
+  margin-top: var(--sp-4);
+  padding-top: var(--sp-4);
+  border-top: 1px solid var(--line);
+}
+
+.cv-perclass > div {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin-top: var(--sp-3);
+}
+
+.cv-perclass-row {
+  display: grid;
+  grid-template-columns: 84px 1fr 52px;
+  gap: var(--sp-3);
+  align-items: center;
+}
+
+.cv-perclass-row > span {
+  overflow: hidden;
+
+  color: var(--muted);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cv-perclass-bar {
+  height: 5px;
+  overflow: hidden;
+
+  border-radius: 3px;
+  background: var(--surface-raised);
+}
+
+.cv-perclass-bar i {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: var(--accent);
+}
+
+.cv-perclass-row strong {
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  text-align: right;
+}
+
+/* --------------------------------------------------
+   NOTES / DISCLAIMER
+-------------------------------------------------- */
+
+.cv-echo-notes {
+  margin: var(--sp-3) 0 0;
+  padding-left: var(--sp-4);
+
+  color: var(--muted);
+  font-size: 10.5px;
+  line-height: 1.7;
+}
+
+.cv-echo-notes li {
+  margin-bottom: 2px;
+}
+
+.cv-echo-disclaimer {
+  padding: var(--sp-3) var(--sp-4);
+
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--r-md);
+
+  color: var(--muted);
+  font-size: 10.5px;
+  line-height: 1.6;
+}
+
+/* ==================================================
+   MASK CANVAS
+   ================================================== */
+
+.cv-mask-canvas {
+  display: flex;
+  flex-direction: column;
+}
+
+.cv-mask-stage {
+  position: relative;
+
+  display: grid;
+  place-items: center;
+
+  aspect-ratio: 1 / 1;
+  overflow: hidden;
+
+  background: #0b0f12;
+}
+
+.cv-mask-base,
+.cv-mask-layer {
+  position: absolute;
+  inset: 0;
+
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+
+  image-rendering: pixelated;
+}
+
+.cv-mask-layer {
+  pointer-events: none;
+}
+
+.cv-mask-canvas-empty {
+  display: grid;
+  place-items: center;
+
+  padding: var(--sp-10) var(--sp-4);
+
+  color: var(--soft);
+  font-size: 11px;
+  text-align: center;
+}
+
+.cv-mask-controls {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+
+  padding: var(--sp-3) var(--sp-4);
+  border-top: 1px solid var(--line);
+}
+
+.cv-mask-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+
+.cv-mask-none {
+  color: var(--soft);
+  font-size: 10.5px;
+}
+
+.cv-mask-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+
+  padding: var(--sp-1) var(--sp-2);
+
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: #fff;
+
+  color: var(--ink);
+  font-size: 10.5px;
+
+  transition: border-color 150ms var(--ease), opacity 150ms var(--ease);
+}
+
+.cv-mask-toggle:hover {
+  border-color: var(--line-strong);
+}
+
+.cv-mask-toggle i {
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+}
+
+.cv-mask-toggle.off {
+  background: var(--surface);
+  color: var(--soft);
+}
+
+.cv-mask-toggle.off i {
+  opacity: 0.25;
+}
+
+.cv-mask-opacity {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+
+  color: var(--soft);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.cv-mask-opacity input[type="range"] {
+  flex: 1;
+  min-width: 90px;
+  accent-color: var(--accent);
+}
+
+.cv-mask-opacity > span {
+  width: 34px;
+  color: var(--ink);
+  text-align: right;
+}
+
+/* ==================================================
+   PENDING MODEL
+
+   Deliberately plain. Nothing here should read like a
+   result, because there is no result.
+   ================================================== */
+
+.cv-pending {
+  padding: var(--sp-6);
+
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--r-lg);
+  background: var(--surface);
+}
+
+.cv-pending-badge {
+  display: inline-block;
+  margin-bottom: var(--sp-3);
+  padding: 3px var(--sp-2);
+
+  border: 1px solid var(--line-strong);
+  border-radius: 3px;
+  background: #fff;
+
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.cv-pending h3 {
+  margin: 0 0 var(--sp-2);
+
+  color: var(--ink);
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.cv-pending > p {
+  max-width: 62ch;
+  margin: 0;
+
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.cv-pending-file {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+
+  margin-top: var(--sp-4);
+  padding: var(--sp-3);
+
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: #fff;
+}
+
+.cv-pending-file strong {
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 500;
+  word-break: break-all;
+}
+
+.cv-pending-file span {
+  color: var(--muted);
+  font-size: 10.5px;
+  line-height: 1.6;
+}
+
+.cv-pending-requirement {
+  margin-top: var(--sp-4);
+  padding-top: var(--sp-4);
+  border-top: 1px solid var(--line);
+}
+
+.cv-pending-requirement p {
+  max-width: 68ch;
+  margin: var(--sp-2) 0 0;
+
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  line-height: 1.7;
+}
+
+.cv-pending-note {
+  margin-top: var(--sp-4);
+
+  color: var(--soft);
+  font-size: 10.5px;
+  line-height: 1.6;
+}
+
+/* ==================================================
+   CLINICAL RESULT
+   ================================================== */
+
+.cv-clinical-result {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+
+.cv-input-list {
+  margin: var(--sp-3) 0;
+  padding-left: var(--sp-4);
+
+  color: var(--text);
+  font-size: 11px;
+  line-height: 1.8;
+}
+
+.cv-risk-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  margin-top: var(--sp-3);
+}
+
+.cv-risk-chips span {
+  padding: var(--sp-1) var(--sp-3);
+
+  border: 1px solid #e8d5ae;
+  border-radius: 999px;
+  background: var(--warning-tint);
+
+  color: #7d4f0b;
+  font-size: 10.5px;
+}
+
+.cv-symptom-block {
+  margin-top: var(--sp-4);
+  padding: var(--sp-3) var(--sp-4);
+
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: #fff;
+}
+
+.cv-symptom-block p {
+  margin: var(--sp-2) 0 0;
+
+  color: var(--text);
+  font-size: 11.5px;
+  line-height: 1.7;
+}
+
+/* ==================================================
+   ASSISTANT ADDITIONS
+   ================================================== */
+
+.cv-context-item.unavailable {
+  color: var(--soft);
+}
+
+.cv-context-item.unavailable em {
+  margin-left: auto;
+
+  color: var(--soft);
+  font-family: var(--font-mono);
+  font-size: 8.5px;
+  font-style: normal;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.cv-context-hint {
+  margin-top: var(--sp-3);
+  padding-top: var(--sp-3);
+  border-top: 1px solid var(--line);
+
+  color: var(--soft);
+  font-size: 10px;
+  line-height: 1.6;
+}
+
+.cv-message.error .cv-message-text {
+  border-color: #eccccc;
+  background: var(--danger-tint);
+  color: #7d2a2a;
+}
+
+.cv-message-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+
+  margin-top: var(--sp-2);
+
+  color: var(--soft);
+  font-family: var(--font-mono);
+  font-size: 8.5px;
+  letter-spacing: 0.04em;
+}
+
+.cv-context-toggle {
+  padding: 0;
+
+  border: 0;
+  border-bottom: 1px dotted var(--line-strong);
+  background: none;
+
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 8.5px;
+  letter-spacing: 0.04em;
+}
+
+.cv-context-toggle:hover {
+  color: var(--accent-strong);
+}
+
+/* Exactly what was sent to the model, verbatim. */
+
+.cv-context-preview {
+  max-height: 260px;
+  margin: var(--sp-2) 0 0;
+  overflow: auto;
+  padding: var(--sp-3);
+
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--surface-raised);
+
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.cv-thinking {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.cv-thinking span {
+  width: 5px;
+  height: 5px;
+
+  border-radius: 50%;
+  background: var(--soft);
+
+  animation: cv-thinking-pulse 1.2s var(--ease) infinite;
+}
+
+.cv-thinking span:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.cv-thinking span:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+.cv-thinking em {
+  color: var(--soft);
+  font-size: 11px;
+  font-style: normal;
+}
+
+@keyframes cv-thinking-pulse {
+  0%,
+  100% {
+    opacity: 0.25;
+    transform: translateY(0);
+  }
+
+  50% {
+    opacity: 1;
+    transform: translateY(-2px);
+  }
+}
+
+/* ==================================================
    RESPONSIVE
    ================================================== */
 
@@ -2073,5 +3005,362 @@
   .cv-footer span {
     padding-left: 0;
     border-left: 0;
+  }
+}
+/* ==================================================
+   RESULTS CONTAINER
+   ================================================== */
+
+.cv-results {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-5);
+  min-width: 0;
+}
+
+/* ==================================================
+   ORIENTATION CONTROL
+
+   The model was trained on apex-left images. A display-oriented
+   upload is out of distribution, so this control is given real
+   visual weight when it has not been addressed.
+   ================================================== */
+
+.cv-orientation {
+  grid-column: 1 / -1;
+
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+
+  padding: var(--sp-4);
+
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface);
+}
+
+.cv-orientation.attention {
+  border-color: #e8d5ae;
+  background: var(--warning-tint);
+}
+
+.cv-orientation-head {
+  display: flex;
+  gap: var(--sp-3);
+  align-items: center;
+  justify-content: space-between;
+}
+
+.cv-orientation-flag {
+  padding: 3px var(--sp-2);
+
+  border-radius: 100px;
+  background: var(--warning);
+
+  color: #fff;
+  font-family: var(--font-mono);
+  font-size: 8.5px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.cv-orientation > p {
+  margin: 0;
+
+  color: var(--text);
+  font-size: 11px;
+  line-height: 1.65;
+}
+
+.cv-orientation.attention > p {
+  color: #7d4f0b;
+}
+
+.cv-orientation > p strong {
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 500;
+}
+
+.cv-orientation-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-3);
+  align-items: center;
+}
+
+.cv-orientation-rotations {
+  display: inline-flex;
+
+  overflow: hidden;
+
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-sm);
+  background: #fff;
+}
+
+.cv-orientation-rotations button {
+  padding: var(--sp-2) var(--sp-3);
+
+  border: 0;
+  border-right: 1px solid var(--line);
+  background: transparent;
+
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  cursor: pointer;
+  transition: background 120ms var(--ease), color 120ms var(--ease);
+}
+
+.cv-orientation-rotations button:last-child {
+  border-right: 0;
+}
+
+.cv-orientation-rotations button:hover:not(:disabled) {
+  background: var(--accent-tint);
+  color: var(--accent-strong);
+}
+
+.cv-orientation-rotations button.active {
+  background: var(--accent);
+  color: #fff;
+}
+
+.cv-orientation-flip {
+  padding: var(--sp-2) var(--sp-3);
+
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-sm);
+  background: #fff;
+
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  cursor: pointer;
+  transition: background 120ms var(--ease), color 120ms var(--ease);
+}
+
+.cv-orientation-flip:hover:not(:disabled) {
+  background: var(--accent-tint);
+  color: var(--accent-strong);
+}
+
+.cv-orientation-flip.active {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+}
+
+.cv-orientation-rotations button:disabled,
+.cv-orientation-flip:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.cv-orientation-hint {
+  color: var(--soft);
+  font-size: 10px;
+  line-height: 1.6;
+}
+
+/* ==================================================
+   PRESENCE-THRESHOLD NOTE
+
+   Explains that "Not identified" is a pixel cutoff, not a
+   clinical absence.
+   ================================================== */
+
+.cv-threshold-note {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+
+  margin-top: var(--sp-3);
+  padding: var(--sp-3);
+
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+}
+
+.cv-threshold-note strong {
+  color: var(--ink);
+  font-size: 10.5px;
+  font-weight: 600;
+}
+
+.cv-threshold-note span {
+  color: var(--muted);
+  font-size: 10.5px;
+  line-height: 1.6;
+}
+
+/* ==================================================
+   SECONDARY METRICS
+
+   Validation figures are deliberately quieter than the test
+   figures: they guided training and are not an independent
+   estimate of performance.
+   ================================================== */
+
+.cv-metrics-note.secondary {
+  border-left-color: var(--line-strong);
+  background: var(--surface);
+}
+
+.cv-metrics-note.secondary strong {
+  color: var(--muted);
+}
+
+.cv-metrics-note.secondary span {
+  color: var(--soft);
+}
+
+.cv-echo-block .cv-metric.muted {
+  background: var(--surface);
+}
+
+.cv-echo-block .cv-metric.muted strong {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+/* Qualifier inside a headline metric, e.g. the reminder that a
+   Dice score is dataset-level rather than per-case. */
+
+.cv-summary-confidence em {
+  display: block;
+  margin-top: var(--sp-1);
+
+  color: var(--soft);
+  font-size: 9px;
+  font-style: normal;
+  line-height: 1.5;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.cv-model-grid strong em {
+  color: var(--soft);
+  font-style: normal;
+  font-weight: 400;
+}
+
+/* ==================================================
+   EXPLAINABILITY UNAVAILABLE
+
+   Shown instead of the saliency panels when no gradient was
+   produced. An all-zero map renders as a plausible heatmap, so
+   the honest thing is to show nothing at all.
+   ================================================== */
+
+.cv-xai-unavailable {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+
+  padding: var(--sp-5);
+
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--r-md);
+  background: var(--surface);
+}
+
+.cv-xai-unavailable strong {
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.cv-xai-unavailable p {
+  margin: 0;
+  max-width: 62ch;
+
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.7;
+}
+
+.cv-xai-unavailable ul {
+  margin: var(--sp-1) 0 0;
+  padding-left: var(--sp-4);
+
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+
+.cv-xai-unavailable li {
+  color: var(--soft);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1.6;
+}
+
+/* --------------------------------------------------
+   RESPONSIVE — echo result and new components
+-------------------------------------------------- */
+
+@media (max-width: 1180px) {
+  .cv-echo-result {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .cv-echo-image-frame,
+  .cv-mask-stage {
+    max-height: 520px;
+  }
+}
+
+@media (max-width: 850px) {
+  .cv-model-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .cv-perclass-row {
+    grid-template-columns: 76px 1fr 46px;
+    gap: var(--sp-2);
+  }
+
+  .cv-banner {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}
+
+@media (max-width: 600px) {
+  .cv-echo-block .cv-metric-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .cv-pending {
+    padding: var(--sp-4);
+  }
+
+  .cv-structure-table th,
+  .cv-structure-table td {
+    font-size: 10.5px;
+  }
+
+  .cv-mask-opacity {
+    flex-wrap: wrap;
+  }
+
+  .cv-orientation-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .cv-orientation-rotations {
+    justify-content: space-between;
+  }
+
+  .cv-orientation-rotations button {
+    flex: 1;
+    padding: var(--sp-2) var(--sp-1);
   }
 }

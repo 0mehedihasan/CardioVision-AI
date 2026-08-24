@@ -1,5 +1,10 @@
-import { useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+
 import "./App.css";
+
+import { askClinicalQuestion, analyzeEcho, fetchHealth } from "./api";
+import EchoResult from "./components/EchoResult";
+import PendingModel from "./components/PendingModel";
 
 const initialClinicalData = {
   age: "",
@@ -19,6 +24,7 @@ const modalityConfig = {
     description: "2D cardiac ultrasound",
     formats: "DICOM, NIfTI, PNG, JPEG",
     accept: ".png,.jpg,.jpeg,.dcm,.nii,.nii.gz",
+    analyzed: true,
   },
   ccta: {
     label: "Coronary CT angiography",
@@ -26,6 +32,7 @@ const modalityConfig = {
     description: "Cardiac CT / coronary anatomy",
     formats: "DICOM, NIfTI, ZIP series",
     accept: ".dcm,.nii,.nii.gz,.zip,.png,.jpg,.jpeg",
+    analyzed: false,
   },
   ecg: {
     label: "Electrocardiography",
@@ -33,6 +40,7 @@ const modalityConfig = {
     description: "Waveform trace or report",
     formats: "PNG, JPEG, PDF, CSV",
     accept: ".png,.jpg,.jpeg,.pdf,.csv",
+    analyzed: false,
   },
 };
 
@@ -42,8 +50,6 @@ const navItems = [
   { id: "explainability", number: "03", label: "Explainability" },
   { id: "assistant", number: "04", label: "Case assistant" },
 ];
-
-const API_BASE_URL = "http://127.0.0.1:8000";
 
 function App() {
   const [clinicalData, setClinicalData] = useState(initialClinicalData);
@@ -59,6 +65,17 @@ function App() {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysisComplete, setAnalysisComplete] = useState(false);
   const [activeResult, setActiveResult] = useState("overview");
+
+  /* Real backend state */
+  const [health, setHealth] = useState(null);
+  const [healthError, setHealthError] = useState(null);
+  const [echoResult, setEchoResult] = useState(null);
+  const [analysisError, setAnalysisError] = useState(null);
+
+  /* Explicit image geometry. Defaults to no transform: the backend never
+     guesses an orientation, and neither does this UI. */
+  const [echoRotate, setEchoRotate] = useState(0);
+  const [echoFlip, setEchoFlip] = useState(false);
 
   const [question, setQuestion] = useState("");
   const [conversation, setConversation] = useState([]);
@@ -79,13 +96,40 @@ function App() {
     []
   );
 
+  /* ==========================================================
+     BACKEND HEALTH
+
+     The UI advertises capabilities based on what the backend
+     actually reports, so it can never claim a model it lacks.
+     ========================================================== */
+
+  const loadHealth = useCallback(async () => {
+    try {
+      const data = await fetchHealth();
+      setHealth(data);
+      setHealthError(null);
+    } catch (error) {
+      setHealth(null);
+      setHealthError(error.message);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadHealth();
+  }, [loadHealth]);
+
+  const echoModelReady = Boolean(health?.modalities?.echo?.available);
+  const medgemmaReady = Boolean(health?.models?.medgemma?.loaded);
+  const backendOnline = Boolean(health);
+
   const uploadedCount = Object.values(files).filter(Boolean).length;
 
   const hasClinicalData = Object.values(clinicalData).some(
     (value) => value !== "" && value !== false
   );
 
-  const canAnalyze = uploadedCount > 0 || hasClinicalData;
+  /* Analysis needs an echo image: it is the only trained imaging model. */
+  const canAnalyze = Boolean(files.echo) && echoModelReady && !isAnalyzing;
 
   const updateClinical = (field, value) => {
     setClinicalData((previous) => ({
@@ -102,7 +146,15 @@ function App() {
       [modality]: file,
     }));
 
-    setAnalysisComplete(false);
+    if (modality === "echo") {
+      setAnalysisComplete(false);
+      setEchoResult(null);
+      setAnalysisError(null);
+      // A new image gets a clean slate: the previous file's rotation says
+      // nothing about how this one was exported.
+      setEchoRotate(0);
+      setEchoFlip(false);
+    }
   };
 
   const removeFile = (modality) => {
@@ -111,97 +163,16 @@ function App() {
       [modality]: null,
     }));
 
-    setAnalysisComplete(false);
-  };
-
-  const runAnalysis = () => {
-    if (!canAnalyze || isAnalyzing) return;
-
-    setIsAnalyzing(true);
-    scrollToSection("results");
-
-    setTimeout(() => {
-      setIsAnalyzing(false);
-      setAnalysisComplete(true);
-      setActiveResult("overview");
-    }, 2000);
-  };
-
-  /*
-   * ============================================================
-   * MEDGEMMA CLINICAL QUESTION
-   * ============================================================
-   */
-
-  const askQuestion = async (text) => {
-    const trimmed = (text ?? question).trim();
-
-    if (!trimmed || isAsking) return;
-
-    const userMessage = {
-      role: "user",
-      text: trimmed,
-    };
-
-    setConversation((previous) => [
-      ...previous,
-      userMessage,
-    ]);
-
-    setQuestion("");
-    setIsAsking(true);
-
-    try {
-      const response = await fetch(
-        `${API_BASE_URL}/api/clinical-question`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            question: trimmed,
-          }),
-        }
-      );
-
-      if (!response.ok) {
-        throw new Error(
-          `Clinical question request failed with status ${response.status}`
-        );
-      }
-
-      const data = await response.json();
-
-      setConversation((previous) => [
-        ...previous,
-        {
-          role: "assistant",
-          text:
-            data.answer ||
-            "No response was returned by the clinical language model.",
-          model: data.model || "MedGemma 1.5 4B IT",
-          device: data.device || "mps",
-        },
-      ]);
-    } catch (error) {
-      console.error("Clinical question error:", error);
-
-      setConversation((previous) => [
-        ...previous,
-        {
-          role: "assistant",
-          text:
-            "Unable to connect to the local clinical model. Please make sure the CardioVision AI backend is running.",
-          error: true,
-        },
-      ]);
-    } finally {
-      setIsAsking(false);
+    if (modality === "echo") {
+      setAnalysisComplete(false);
+      setEchoResult(null);
+      setAnalysisError(null);
+      setEchoRotate(0);
+      setEchoFlip(false);
     }
   };
 
-  const scrollToSection = (section) => {
+  const scrollToSection = useCallback((section) => {
     setActiveSection(section);
 
     const element = document.getElementById(section);
@@ -212,7 +183,139 @@ function App() {
         block: "start",
       });
     }
+  }, []);
+
+  /* ==========================================================
+     REAL ANALYSIS
+
+     Calls POST /api/analyze/echo and renders the model's actual
+     output. There are no simulated results and no placeholder
+     metrics anywhere in this flow.
+     ========================================================== */
+
+  const runAnalysis = useCallback(
+    async (overrides = {}) => {
+      if (!files.echo || !echoModelReady || isAnalyzing) return;
+
+      const rotate = overrides.rotate ?? echoRotate;
+      const flip = overrides.flip ?? echoFlip;
+
+      setIsAnalyzing(true);
+      setAnalysisError(null);
+      setEchoResult(null);
+      setAnalysisComplete(false);
+      setEchoRotate(rotate);
+      setEchoFlip(flip);
+
+      scrollToSection("results");
+
+      try {
+        const result = await analyzeEcho(files.echo, { rotate, flip });
+
+        setEchoResult(result);
+        setAnalysisComplete(true);
+        setActiveResult("echo");
+      } catch (error) {
+        setAnalysisError(error.message);
+        // Refresh health so the UI reflects a backend that went away.
+        loadHealth();
+      } finally {
+        setIsAnalyzing(false);
+      }
+    },
+    [files.echo, echoModelReady, isAnalyzing, echoRotate, echoFlip, loadHealth]
+  );
+
+  /* Re-run the same image at a different rotation. Used by the orientation
+     control in the echo result, since a display-oriented upload is a
+     quarter turn away from the training distribution. */
+  const reanalyzeWithOrientation = useCallback(
+    (rotate, flip) => runAnalysis({ rotate, flip }),
+    [runAnalysis]
+  );
+
+  /* ==========================================================
+     CASE STATE FOR THE LANGUAGE MODEL
+
+     Sent structured; the backend renders it into prompt text,
+     including an explicit list of unavailable modalities so the
+     model cannot invent CCTA or ECG findings.
+     ========================================================== */
+
+  const caseState = useMemo(
+    () => ({
+      case_id: patientId,
+      clinical: clinicalData,
+      echo: echoResult
+        ? {
+            analyzed: true,
+            model: echoResult.model,
+            structures: echoResult.structures,
+            input: echoResult.input,
+            // Both bear on how far the findings can be trusted, so the
+            // backend needs them to caveat the prompt honestly.
+            orientation: echoResult.orientation,
+            quantification: echoResult.quantification,
+          }
+        : { analyzed: false },
+      modalities_provided: {
+        echo: Boolean(files.echo),
+        ccta: Boolean(files.ccta),
+        ecg: Boolean(files.ecg),
+      },
+    }),
+    [patientId, clinicalData, echoResult, files]
+  );
+
+  const askQuestion = async (text) => {
+    const trimmed = (text ?? question).trim();
+
+    if (!trimmed || isAsking) return;
+
+    setConversation((previous) => [
+      ...previous,
+      { role: "user", text: trimmed },
+    ]);
+
+    setQuestion("");
+    setIsAsking(true);
+
+    try {
+      const data = await askClinicalQuestion(trimmed, caseState);
+
+      setConversation((previous) => [
+        ...previous,
+        {
+          role: "assistant",
+          text:
+            data.answer ||
+            "No response was returned by the clinical language model.",
+          model: data.model,
+          device: data.device,
+          contextUsed: data.context_used,
+          contextPreview: data.context_preview,
+        },
+      ]);
+    } catch (error) {
+      setConversation((previous) => [
+        ...previous,
+        {
+          role: "assistant",
+          text: error.message,
+          error: true,
+        },
+      ]);
+    } finally {
+      setIsAsking(false);
+    }
   };
+
+  const contextItems = [
+    { label: "Clinical", active: hasClinicalData },
+    { label: "Echo findings", active: Boolean(echoResult) },
+    { label: "CCTA", active: false, unavailable: true },
+    { label: "ECG", active: false, unavailable: true },
+  ];
 
   return (
     <div className="cv-shell">
@@ -225,9 +328,7 @@ function App() {
           <div className="cv-brand-mark">CV</div>
 
           <div>
-            <div className="cv-brand-name">
-              CardioVision
-            </div>
+            <div className="cv-brand-name">CardioVision</div>
 
             <div className="cv-brand-subtitle">
               Multimodal cardiovascular intelligence
@@ -235,9 +336,17 @@ function App() {
           </div>
         </div>
 
-        <div className="cv-header-center">
+        <div
+          className={`cv-header-center ${backendOnline ? "" : "offline"}`}
+          title={healthError || undefined}
+        >
           <span className="cv-system-dot" />
-          Local inference · system ready
+
+          {backendOnline
+            ? `Local inference · ${(health.device || "unknown").toUpperCase()} · ` +
+              `echo ${echoModelReady ? "ready" : "unavailable"} · ` +
+              `MedGemma ${medgemmaReady ? "ready" : "unavailable"}`
+            : "Backend offline"}
         </div>
 
         <div className="cv-header-actions">
@@ -248,9 +357,7 @@ function App() {
             New case
           </button>
 
-          <div className="cv-user-avatar">
-            MH
-          </div>
+          <div className="cv-user-avatar">MH</div>
         </div>
       </header>
 
@@ -262,9 +369,7 @@ function App() {
         {navItems.map((item) => (
           <button
             key={item.id}
-            className={
-              activeSection === item.id ? "active" : ""
-            }
+            className={activeSection === item.id ? "active" : ""}
             onClick={() => scrollToSection(item.id)}
           >
             {item.label}
@@ -278,23 +383,17 @@ function App() {
         ==================================================== */}
 
         <aside className="cv-sidebar">
-          <div className="cv-sidebar-label">
-            Workspace
-          </div>
+          <div className="cv-sidebar-label">Workspace</div>
 
           {navItems.map((item) => (
             <button
               key={item.id}
               className={`cv-nav-item ${
-                activeSection === item.id
-                  ? "active"
-                  : ""
+                activeSection === item.id ? "active" : ""
               }`}
               onClick={() => scrollToSection(item.id)}
             >
-              <span className="cv-nav-number">
-                {item.number}
-              </span>
+              <span className="cv-nav-number">{item.number}</span>
 
               <span>{item.label}</span>
             </button>
@@ -303,14 +402,10 @@ function App() {
           <div className="cv-sidebar-spacer" />
 
           <div className="cv-local-card">
-            <div className="cv-local-icon">
-              ◉
-            </div>
+            <div className="cv-local-icon">◉</div>
 
             <div>
-              <div className="cv-local-title">
-                Local inference
-              </div>
+              <div className="cv-local-title">Local inference</div>
 
               <div className="cv-local-text">
                 Patient data remains on this device.
@@ -329,19 +424,44 @@ function App() {
           ================================================== */}
 
           <section className="cv-hero">
-            <div className="cv-eyebrow">
-              Cardiovascular AI platform
-            </div>
+            <div className="cv-eyebrow">Cardiovascular AI platform</div>
 
-            <h1>
-              Understand the heart through multimodal AI.
-            </h1>
+            <h1>Understand the heart through multimodal AI.</h1>
 
             <p>
-              Analyze clinical information, echocardiography,
-              CCTA, and ECG data within a unified patient case.
+              Echocardiography segmentation runs locally on a trained
+              UNet++ model. CCTA, ECG and clinical risk models are still
+              in development and are clearly marked as unavailable.
             </p>
           </section>
+
+          {!backendOnline && (
+            <div className="cv-banner error">
+              <strong>Backend offline</strong>
+
+              <span>{healthError}</span>
+
+              <button className="cv-secondary-button" onClick={loadHealth}>
+                Retry
+              </button>
+            </div>
+          )}
+
+          {backendOnline && !echoModelReady && (
+            <div className="cv-banner warning">
+              <strong>Echo model unavailable</strong>
+
+              <span>
+                {health?.modalities?.echo?.note ||
+                  health?.models?.echo?.error ||
+                  "The segmentation model did not load."}
+              </span>
+
+              <button className="cv-secondary-button" onClick={loadHealth}>
+                Recheck
+              </button>
+            </div>
+          )}
 
           {/* ==================================================
               01. PATIENT CASE
@@ -350,18 +470,13 @@ function App() {
           <section id="case" className="cv-section">
             <div className="cv-section-head">
               <div>
-                <div className="cv-section-index">
-                  01 / Patient case
-                </div>
+                <div className="cv-section-index">01 / Patient case</div>
 
-                <h2>
-                  Build a clinical case
-                </h2>
+                <h2>Build a clinical case</h2>
 
                 <p>
-                  Provide the available patient information
-                  and imaging studies. Missing modalities can
-                  remain unavailable.
+                  Provide the available patient information and imaging
+                  studies. Missing modalities can remain unavailable.
                 </p>
               </div>
 
@@ -372,48 +487,28 @@ function App() {
             </div>
 
             <div className="cv-case-grid">
-              <ClinicalForm
-                data={clinicalData}
-                onChange={updateClinical}
-              />
+              <ClinicalForm data={clinicalData} onChange={updateClinical} />
 
               <div className="cv-modality-panel">
                 <div className="cv-panel-header">
-                  <span className="cv-card-kicker">
-                    Imaging studies
-                  </span>
+                  <span className="cv-card-kicker">Imaging studies</span>
 
-                  <h3>
-                    Modalities
-                  </h3>
+                  <h3>Modalities</h3>
                 </div>
 
                 <div className="cv-modality-list">
-                  {Object.entries(modalityConfig).map(
-                    ([key, modality]) => (
-                      <ModalityRow
-                        key={key}
-                        modalityKey={key}
-                        modality={modality}
-                        file={files[key]}
-                        inputRef={inputRefs[key]}
-                        isDragOver={
-                          dragOver === key
-                        }
-                        onDragOver={(over) =>
-                          setDragOver(
-                            over ? key : null
-                          )
-                        }
-                        onUpload={(file) =>
-                          handleFile(key, file)
-                        }
-                        onRemove={() =>
-                          removeFile(key)
-                        }
-                      />
-                    )
-                  )}
+                  {Object.entries(modalityConfig).map(([key, modality]) => (
+                    <ModalityRow
+                      key={key}
+                      modality={modality}
+                      file={files[key]}
+                      inputRef={inputRefs[key]}
+                      isDragOver={dragOver === key}
+                      onDragOver={(over) => setDragOver(over ? key : null)}
+                      onUpload={(file) => handleFile(key, file)}
+                      onRemove={() => removeFile(key)}
+                    />
+                  ))}
                 </div>
               </div>
             </div>
@@ -421,41 +516,37 @@ function App() {
             <div className="cv-analysis-bar">
               <div>
                 <div className="cv-analysis-title">
-                  Ready for multimodal analysis
+                  {files.echo
+                    ? "Ready to segment echocardiography"
+                    : "An echo image is required to run analysis"}
                 </div>
 
                 <div className="cv-analysis-subtitle">
-                  {uploadedCount} imaging modalit
-                  {uploadedCount === 1
-                    ? "y"
-                    : "ies"}{" "}
-                  provided
-                  {hasClinicalData
-                    ? " · Clinical data available"
-                    : " · No clinical data yet"}
+                  {files.echo
+                    ? `${files.echo.name} · ${
+                        hasClinicalData
+                          ? "clinical data will be passed to the case assistant"
+                          : "no clinical data entered"
+                      }`
+                    : "Echocardiography is the only trained imaging model. " +
+                      "Clinical data alone can still be discussed in the case assistant."}
                 </div>
               </div>
 
               <button
-                className={`cv-primary-button ${
-                  isAnalyzing ? "loading" : ""
-                }`}
-                disabled={
-                  !canAnalyze || isAnalyzing
-                }
-                onClick={runAnalysis}
+                className={`cv-primary-button ${isAnalyzing ? "loading" : ""}`}
+                disabled={!canAnalyze}
+                onClick={() => runAnalysis()}
               >
                 {isAnalyzing ? (
                   <>
                     <span className="cv-button-spinner" />
-                    Analyzing case
+                    Segmenting
                   </>
                 ) : (
                   <>
-                    Analyze case
-                    <span aria-hidden="true">
-                      →
-                    </span>
+                    Analyze echo
+                    <span aria-hidden="true">→</span>
                   </>
                 )}
               </button>
@@ -469,130 +560,126 @@ function App() {
           <section id="results" className="cv-section">
             <div className="cv-section-head">
               <div>
-                <div className="cv-section-index">
-                  02 / Multimodal analysis
-                </div>
+                <div className="cv-section-index">02 / Analysis</div>
 
-                <h2>
-                  Case intelligence
-                </h2>
+                <h2>Case intelligence</h2>
 
                 <p>
-                  A unified workspace for modality-specific
-                  inference and multimodal interpretation.
+                  Model output for every modality that has a trained model
+                  behind it.
                 </p>
               </div>
 
               <div
                 className={`cv-status-chip ${
-                  analysisComplete
-                    ? "complete"
-                    : ""
+                  analysisComplete ? "complete" : ""
                 }`}
               >
                 <span />
 
-                {analysisComplete
-                  ? "Analysis complete"
-                  : "Awaiting analysis"}
+                {analysisComplete ? "Analysis complete" : "Awaiting analysis"}
               </div>
             </div>
 
-            {!analysisComplete &&
-              !isAnalyzing && (
-                <div className="cv-empty-analysis">
-                  <div className="cv-empty-icon">
-                    ◌
-                  </div>
+            {analysisError && (
+              <div className="cv-banner error">
+                <strong>Analysis failed</strong>
 
-                  <h3>
-                    No analysis generated yet
-                  </h3>
+                <span>{analysisError}</span>
+              </div>
+            )}
 
-                  <p>
-                    Add patient information or imaging
-                    data above, then run the analysis
-                    pipeline.
-                  </p>
+            {!analysisComplete && !isAnalyzing && !analysisError && (
+              <div className="cv-empty-analysis">
+                <div className="cv-empty-icon">◌</div>
 
-                  <button
-                    className="cv-secondary-button"
-                    onClick={() =>
-                      scrollToSection("case")
-                    }
-                  >
-                    Configure patient case
-                  </button>
-                </div>
-              )}
+                <h3>No analysis generated yet</h3>
+
+                <p>
+                  Upload an echocardiography image above, then run the
+                  segmentation model.
+                </p>
+
+                <button
+                  className="cv-secondary-button"
+                  onClick={() => scrollToSection("case")}
+                >
+                  Configure patient case
+                </button>
+              </div>
+            )}
 
             {isAnalyzing && <AnalysisLoader />}
 
             {analysisComplete && (
               <div className="cv-results">
-                <div
-                  className="cv-tabs"
-                  role="tablist"
-                >
+                <div className="cv-tabs" role="tablist">
                   {[
-                    ["overview", "Overview"],
-                    ["echo", "Echo"],
-                    ["ccta", "CCTA"],
-                    ["clinical", "Clinical"],
-                  ].map(([id, label]) => (
+                    ["overview", "Overview", true],
+                    ["echo", "Echo", true],
+                    ["ccta", "CCTA", false],
+                    ["ecg", "ECG", false],
+                    ["clinical", "Clinical", false],
+                  ].map(([id, label, available]) => (
                     <button
                       key={id}
                       role="tab"
-                      aria-selected={
-                        activeResult === id
-                      }
-                      className={
-                        activeResult === id
-                          ? "active"
-                          : ""
-                      }
-                      onClick={() =>
-                        setActiveResult(id)
-                      }
+                      aria-selected={activeResult === id}
+                      className={`${activeResult === id ? "active" : ""} ${
+                        available ? "" : "pending"
+                      }`}
+                      onClick={() => setActiveResult(id)}
                     >
                       {label}
+                      {!available && <i className="cv-tab-dot" />}
                     </button>
                   ))}
                 </div>
 
                 {activeResult === "overview" && (
                   <OverviewResult
+                    echoResult={echoResult}
                     files={files}
                     clinicalData={clinicalData}
+                    hasClinicalData={hasClinicalData}
                   />
                 )}
 
-                {activeResult === "echo" && (
-                  <ModalityResult
-                    file={files.echo}
-                    label="Echocardiography"
-                    metricLabel="LV segmentation"
-                    metricValue="Available"
-                    confidence="84.2%"
-                    detail="The trained echocardiography model will provide cardiac structure segmentation and relevant prediction outputs here."
-                  />
-                )}
+                {activeResult === "echo" &&
+                  (echoResult ? (
+                    <EchoResult
+                      result={echoResult}
+                      rotate={echoRotate}
+                      flip={echoFlip}
+                      onReorient={reanalyzeWithOrientation}
+                      isAnalyzing={isAnalyzing}
+                    />
+                  ) : (
+                    <div className="cv-empty-analysis">
+                      <p>No echo image was analysed in this case.</p>
+                    </div>
+                  ))}
 
                 {activeResult === "ccta" && (
-                  <ModalityResult
+                  <PendingModel
+                    label="Coronary CT angiography"
                     file={files.ccta}
-                    label="CCTA"
-                    metricLabel="Anatomical analysis"
-                    metricValue="Available"
-                    confidence="89.1%"
-                    detail="The CCTA model will provide coronary and cardiovascular structure segmentation together with disease-related imaging findings."
+                    note="There is no trained CCTA model yet, so nothing is inferred from CT data."
+                    requirement="notebooks/01_CCTA_Training.ipynb needs to be written and run, and the resulting weights saved to models/ccta/."
+                  />
+                )}
+
+                {activeResult === "ecg" && (
+                  <PendingModel
+                    label="Electrocardiography"
+                    file={files.ecg}
+                    note="There is no ECG pipeline yet — no training notebook and no model."
+                    requirement="An ECG training pipeline and a saved model in models/ecg/."
                   />
                 )}
 
                 {activeResult === "clinical" && (
-                  <ClinicalResult
-                    clinicalData={clinicalData}
-                  />
+                  <ClinicalResult clinicalData={clinicalData} />
                 )}
               </div>
             )}
@@ -602,144 +689,91 @@ function App() {
               03. EXPLAINABILITY
           ================================================== */}
 
-          {analysisComplete && (
-            <section
-              id="explainability"
-              className="cv-section"
-            >
+          {analysisComplete && echoResult && (
+            <section id="explainability" className="cv-section">
               <div className="cv-section-head">
                 <div>
-                  <div className="cv-section-index">
-                    03 / Explainability
-                  </div>
+                  <div className="cv-section-index">03 / Explainability</div>
 
-                  <h2>
-                    See why the model predicts
-                  </h2>
+                  <h2>See what the model responded to</h2>
 
                   <p>
-                    Model explanations connect predictions
-                    with relevant image regions and
-                    anatomical structures.
+                    {echoResult.explainability?.available
+                      ? echoResult.explainability?.description
+                      : "No attribution map was produced for this run, so " +
+                        "there is nothing to show here."}
                   </p>
                 </div>
               </div>
 
-              <div className="cv-xai-grid">
-                <div className="cv-xai-image">
-                  <div className="cv-image-placeholder cv-heatmap">
-                    <div className="cv-heatmap-ring" />
+              {echoResult.explainability?.available ? (
+                <>
+                  <div className="cv-xai-grid">
+                    <div className="cv-xai-image">
+                      <div className="cv-echo-image-frame">
+                        <img
+                          src={echoResult.images?.saliency_overlay}
+                          alt="Gradient saliency overlay"
+                        />
+                      </div>
 
-                    <span className="cv-image-tag">
-                      Grad-CAM
-                    </span>
-                  </div>
+                      <div className="cv-image-caption">
+                        <strong>{echoResult.explainability?.method}</strong>
 
-                  <div className="cv-image-caption">
-                    <strong>
-                      Prediction attribution
-                    </strong>
-
-                    <span>
-                      Regions contributing to the selected
-                      prediction
-                    </span>
-                  </div>
-                </div>
-
-                <div className="cv-xai-content">
-                  <span className="cv-card-kicker">
-                    Model explanation
-                  </span>
-
-                  <h3>
-                    Coronary abnormality
-                  </h3>
-
-                  <div className="cv-confidence">
-                    <div>
-                      <span>
-                        Model confidence
-                      </span>
-
-                      <strong>
-                        87.4%
-                      </strong>
+                        <span>
+                          Target: {echoResult.explainability?.target_class}
+                        </span>
+                      </div>
                     </div>
 
-                    <div className="cv-confidence-bar">
-                      <span
-                        style={{
-                          width: "87.4%",
-                        }}
-                      />
+                    <div className="cv-xai-image">
+                      <div className="cv-echo-image-frame">
+                        <img
+                          src={echoResult.images?.combined}
+                          alt="Segmentation and saliency combined"
+                        />
+                      </div>
+
+                      <div className="cv-image-caption">
+                        <strong>Segmentation + saliency</strong>
+
+                        <span>
+                          Predicted structures with attribution overlaid
+                        </span>
+                      </div>
                     </div>
-                  </div>
-
-                  <div className="cv-finding-list">
-                    <Finding
-                      title="Coronary anatomy"
-                      value="Relevant region detected"
-                    />
-
-                    <Finding
-                      title="Cardiac structure"
-                      value="Left ventricular region"
-                    />
-
-                    <Finding
-                      title="Model attention"
-                      value="High regional contribution"
-                    />
                   </div>
 
                   <div className="cv-xai-note">
-                    Explainability outputs show model
-                    attribution and should not be interpreted
-                    as independent clinical evidence.
+                    Saliency shows which input pixels the
+                    left-ventricular-cavity probability was most sensitive
+                    to. It is a property of the model, not independent
+                    clinical evidence, and a bright region is not a finding.
                   </div>
-                </div>
-              </div>
-
-              <div className="cv-segmentation-card">
-                <div>
-                  <span className="cv-card-kicker">
-                    Structural analysis
-                  </span>
-
-                  <h3>
-                    Cardiovascular segmentation
-                  </h3>
+                </>
+              ) : (
+                /* An all-zero gradient renders as a smooth, plausible-looking
+                   heatmap. Showing it would be worse than showing nothing:
+                   it is an explanation of a computation that never happened. */
+                <div className="cv-xai-unavailable">
+                  <strong>Attribution unavailable for this run</strong>
 
                   <p>
-                    Predicted anatomical structures can be
-                    visualized alongside the original
-                    imaging data.
+                    The gradient with respect to the input could not be
+                    computed, so no saliency map exists. The segmentation
+                    above is unaffected and remains valid — only the
+                    explanation is missing.
                   </p>
+
+                  {echoResult.notes?.length > 0 && (
+                    <ul>
+                      {echoResult.notes.map((note, index) => (
+                        <li key={index}>{note}</li>
+                      ))}
+                    </ul>
+                  )}
                 </div>
-
-                <div className="cv-segmentation-visual">
-                  <div className="cv-anatomy-placeholder">
-                    <span />
-                    <span />
-                    <span />
-                  </div>
-
-                  <div className="cv-segmentation-legend">
-                    <span>
-                      <i /> Coronary vessel
-                    </span>
-
-                    <span>
-                      <i /> Cardiac structure
-                    </span>
-
-                    <span>
-                      <i /> Segmentation region
-                    </span>
-                  </div>
-                </div>
-              </div>
+              )}
             </section>
           )}
 
@@ -747,30 +781,27 @@ function App() {
               04. CASE ASSISTANT
           ================================================== */}
 
-          <section
-            id="assistant"
-            className="cv-section cv-assistant-section"
-          >
+          <section id="assistant" className="cv-section cv-assistant-section">
             <div className="cv-section-head">
               <div>
-                <div className="cv-section-index">
-                  04 / Case assistant
-                </div>
+                <div className="cv-section-index">04 / Case assistant</div>
 
-                <h2>
-                  Ask about this case
-                </h2>
+                <h2>Ask about this case</h2>
 
                 <p>
-                  Query the local medical language model
-                  using the available case context and
-                  model-generated findings.
+                  Query the local medical language model. When a case has
+                  clinical data or echo findings, they are sent as context
+                  and the model is told which modalities are unavailable.
                 </p>
               </div>
 
-              <div className="cv-local-badge">
+              <div
+                className={`cv-local-badge ${medgemmaReady ? "" : "offline"}`}
+              >
                 <span />
-                Local medical model
+                {medgemmaReady
+                  ? "Local medical model"
+                  : "Language model unavailable"}
               </div>
             </div>
 
@@ -781,40 +812,27 @@ function App() {
 
               <div className="cv-assistant-context">
                 <div className="cv-assistant-context-header">
-                  <span className="cv-card-kicker">
-                    Case context
-                  </span>
+                  <span className="cv-card-kicker">Case context</span>
 
                   <span className="cv-context-status">
-                    Loaded
+                    {hasClinicalData || echoResult ? "Loaded" : "Empty"}
                   </span>
                 </div>
 
                 <div className="cv-context-items">
-                  <ContextItem
-                    label="Clinical"
-                    active={hasClinicalData}
-                  />
+                  {contextItems.map((item) => (
+                    <ContextItem
+                      key={item.label}
+                      label={item.label}
+                      active={item.active}
+                      unavailable={item.unavailable}
+                    />
+                  ))}
+                </div>
 
-                  <ContextItem
-                    label="Echocardiography"
-                    active={Boolean(files.echo)}
-                  />
-
-                  <ContextItem
-                    label="CCTA"
-                    active={Boolean(files.ccta)}
-                  />
-
-                  <ContextItem
-                    label="ECG"
-                    active={Boolean(files.ecg)}
-                  />
-
-                  <ContextItem
-                    label="AI findings"
-                    active={analysisComplete}
-                  />
+                <div className="cv-context-hint">
+                  Unavailable modalities are named explicitly in the prompt so
+                  the model cannot invent findings for them.
                 </div>
               </div>
 
@@ -825,39 +843,23 @@ function App() {
               <div className="cv-chat">
                 {conversation.length === 0 ? (
                   <div className="cv-chat-empty">
-                    <div className="cv-chat-icon">
-                      +
-                    </div>
+                    <div className="cv-chat-icon">+</div>
 
-                    <h3>
-                      Ask a clinical question
-                    </h3>
+                    <h3>Ask a clinical question</h3>
 
                     <p>
-                      Ask the local medical language model
-                      to explain or answer a clinical
-                      question.
+                      Ask about general cardiology, or about the findings in
+                      this case.
                     </p>
 
                     <div className="cv-question-suggestions">
                       <button
                         onClick={() =>
                           askQuestion(
-                            "What is hypertension?"
-                          )
-                        }
-                        disabled={isAsking}
-                      >
-                        What is hypertension?
-                      </button>
-
-                      <button
-                        onClick={() =>
-                          askQuestion(
                             "What are the major risk factors for coronary artery disease?"
                           )
                         }
-                        disabled={isAsking}
+                        disabled={isAsking || !medgemmaReady}
                       >
                         CAD risk factors
                       </button>
@@ -865,39 +867,41 @@ function App() {
                       <button
                         onClick={() =>
                           askQuestion(
-                            "What findings require further clinical attention?"
+                            "What do the segmented cardiac structures in this case show?"
                           )
                         }
-                        disabled={isAsking}
+                        disabled={isAsking || !medgemmaReady || !echoResult}
                       >
-                        What needs attention?
+                        Explain these findings
+                      </button>
+
+                      <button
+                        onClick={() =>
+                          askQuestion(
+                            "Based on the available data, what further information would be needed?"
+                          )
+                        }
+                        disabled={isAsking || !medgemmaReady}
+                      >
+                        What is missing?
                       </button>
                     </div>
                   </div>
                 ) : (
                   <div className="cv-conversation">
-                    {conversation.map(
-                      (message, index) => (
-                        <ChatMessage
-                          key={index}
-                          message={message}
-                        />
-                      )
-                    )}
+                    {conversation.map((message, index) => (
+                      <ChatMessage key={index} message={message} />
+                    ))}
 
                     {isAsking && (
                       <div className="cv-message assistant">
-                        <div className="cv-message-role">
-                          CardioVision
-                        </div>
+                        <div className="cv-message-role">CardioVision</div>
 
                         <div className="cv-message-text cv-thinking">
                           <span />
                           <span />
                           <span />
-                          <em>
-                            MedGemma is generating...
-                          </em>
+                          <em>MedGemma is generating...</em>
                         </div>
                       </div>
                     )}
@@ -912,22 +916,17 @@ function App() {
                   <textarea
                     rows="1"
                     placeholder={
-                      isAsking
+                      !medgemmaReady
+                        ? "The language model is not loaded."
+                        : isAsking
                         ? "MedGemma is generating a response..."
                         : "Ask a clinical question..."
                     }
                     value={question}
-                    disabled={isAsking}
-                    onChange={(event) =>
-                      setQuestion(
-                        event.target.value
-                      )
-                    }
+                    disabled={isAsking || !medgemmaReady}
+                    onChange={(event) => setQuestion(event.target.value)}
                     onKeyDown={(event) => {
-                      if (
-                        event.key === "Enter" &&
-                        !event.shiftKey
-                      ) {
+                      if (event.key === "Enter" && !event.shiftKey) {
                         event.preventDefault();
 
                         if (!isAsking) {
@@ -938,13 +937,8 @@ function App() {
                   />
 
                   <button
-                    onClick={() =>
-                      askQuestion()
-                    }
-                    disabled={
-                      !question.trim() ||
-                      isAsking
-                    }
+                    onClick={() => askQuestion()}
+                    disabled={!question.trim() || isAsking || !medgemmaReady}
                   >
                     {isAsking ? (
                       <>
@@ -954,9 +948,7 @@ function App() {
                     ) : (
                       <>
                         Ask
-                        <span aria-hidden="true">
-                          →
-                        </span>
+                        <span aria-hidden="true">→</span>
                       </>
                     )}
                   </button>
@@ -971,19 +963,14 @@ function App() {
 
           <footer className="cv-footer">
             <div>
-              <strong>
-                CardioVision AI
-              </strong>
+              <strong>CardioVision AI</strong>
 
               <span>
-                Multimodal cardiovascular imaging
-                research platform
+                Multimodal cardiovascular imaging research platform
               </span>
             </div>
 
-            <div>
-              Research prototype · Local inference
-            </div>
+            <div>Research prototype · Local inference</div>
           </footer>
         </main>
       </div>
@@ -999,13 +986,9 @@ function ClinicalForm({ data, onChange }) {
   return (
     <div className="cv-clinical-card">
       <div className="cv-panel-header">
-        <span className="cv-card-kicker">
-          Clinical data
-        </span>
+        <span className="cv-card-kicker">Clinical data</span>
 
-        <h3>
-          Patient information
-        </h3>
+        <h3>Patient information</h3>
       </div>
 
       <div className="cv-form">
@@ -1017,12 +1000,7 @@ function ClinicalForm({ data, onChange }) {
               type="number"
               placeholder="e.g. 58"
               value={data.age}
-              onChange={(event) =>
-                onChange(
-                  "age",
-                  event.target.value
-                )
-              }
+              onChange={(event) => onChange("age", event.target.value)}
             />
           </label>
 
@@ -1031,24 +1009,11 @@ function ClinicalForm({ data, onChange }) {
 
             <select
               value={data.sex}
-              onChange={(event) =>
-                onChange(
-                  "sex",
-                  event.target.value
-                )
-              }
+              onChange={(event) => onChange("sex", event.target.value)}
             >
-              <option value="">
-                Select
-              </option>
-
-              <option value="Male">
-                Male
-              </option>
-
-              <option value="Female">
-                Female
-              </option>
+              <option value="">Select</option>
+              <option value="Male">Male</option>
+              <option value="Female">Female</option>
             </select>
           </label>
         </div>
@@ -1060,12 +1025,7 @@ function ClinicalForm({ data, onChange }) {
             rows="3"
             placeholder="Chest pain, dyspnea, fatigue..."
             value={data.symptoms}
-            onChange={(event) =>
-              onChange(
-                "symptoms",
-                event.target.value
-              )
-            }
+            onChange={(event) => onChange("symptoms", event.target.value)}
           />
         </label>
 
@@ -1078,10 +1038,7 @@ function ClinicalForm({ data, onChange }) {
               placeholder="120/80 mmHg"
               value={data.bloodPressure}
               onChange={(event) =>
-                onChange(
-                  "bloodPressure",
-                  event.target.value
-                )
+                onChange("bloodPressure", event.target.value)
               }
             />
           </label>
@@ -1093,67 +1050,32 @@ function ClinicalForm({ data, onChange }) {
               type="number"
               placeholder="72 bpm"
               value={data.heartRate}
-              onChange={(event) =>
-                onChange(
-                  "heartRate",
-                  event.target.value
-                )
-              }
+              onChange={(event) => onChange("heartRate", event.target.value)}
             />
           </label>
         </div>
 
         <div className="cv-checkbox-grid">
-          <label className="cv-checkbox">
-            <input
-              type="checkbox"
-              checked={data.diabetes}
-              onChange={(event) =>
-                onChange(
-                  "diabetes",
-                  event.target.checked
-                )
-              }
-            />
+          {[
+            ["diabetes", "Diabetes"],
+            ["hypertension", "Hypertension"],
+            ["smoking", "Smoking"],
+          ].map(([field, label]) => (
+            <label key={field} className="cv-checkbox">
+              <input
+                type="checkbox"
+                checked={data[field]}
+                onChange={(event) => onChange(field, event.target.checked)}
+              />
 
-            <span>
-              Diabetes
-            </span>
-          </label>
+              <span>{label}</span>
+            </label>
+          ))}
+        </div>
 
-          <label className="cv-checkbox">
-            <input
-              type="checkbox"
-              checked={data.hypertension}
-              onChange={(event) =>
-                onChange(
-                  "hypertension",
-                  event.target.checked
-                )
-              }
-            />
-
-            <span>
-              Hypertension
-            </span>
-          </label>
-
-          <label className="cv-checkbox">
-            <input
-              type="checkbox"
-              checked={data.smoking}
-              onChange={(event) =>
-                onChange(
-                  "smoking",
-                  event.target.checked
-                )
-              }
-            />
-
-            <span>
-              Smoking
-            </span>
-          </label>
+        <div className="cv-form-note">
+          There is no trained clinical risk model yet. These values are not
+          scored — they are passed to the language model as case context.
         </div>
       </div>
     </div>
@@ -1165,7 +1087,6 @@ function ClinicalForm({ data, onChange }) {
    ============================================================ */
 
 function ModalityRow({
-  modalityKey,
   modality,
   file,
   inputRef,
@@ -1174,92 +1095,66 @@ function ModalityRow({
   onUpload,
   onRemove,
 }) {
-  const status = file
-    ? "ready"
-    : "empty";
+  const status = file ? "ready" : "empty";
 
   return (
     <div
-      className={`cv-modality-row ${status} ${
-        isDragOver ? "dragging" : ""
+      className={`cv-modality-row ${status} ${isDragOver ? "dragging" : ""} ${
+        modality.analyzed ? "" : "unsupported"
       }`}
       onDragOver={(event) => {
         event.preventDefault();
         onDragOver(true);
       }}
-      onDragLeave={() =>
-        onDragOver(false)
-      }
+      onDragLeave={() => onDragOver(false)}
       onDrop={(event) => {
         event.preventDefault();
-
         onDragOver(false);
-
-        onUpload(
-          event.dataTransfer.files?.[0]
-        );
+        onUpload(event.dataTransfer.files?.[0]);
       }}
     >
-      <div className="cv-modality-icon">
-        {modality.short}
-      </div>
+      <div className="cv-modality-icon">{modality.short}</div>
 
       <div className="cv-modality-info">
         <div className="cv-modality-title">
           {modality.label}
+
+          {!modality.analyzed && (
+            <span className="cv-inline-badge">No model yet</span>
+          )}
         </div>
 
         <div className="cv-modality-description">
-          {file
-            ? file.name
-            : modality.description}
+          {file ? file.name : modality.description}
         </div>
 
-        {!file && (
-          <div className="cv-modality-formats">
-            {modality.formats}
-          </div>
-        )}
-
-        {file && (
-          <div className="cv-modality-formats">
-            {(file.size / 1024 / 1024).toFixed(
-              2
-            )}{" "}
-            MB
-          </div>
-        )}
+        <div className="cv-modality-formats">
+          {file
+            ? `${(file.size / 1024 / 1024).toFixed(2)} MB`
+            : modality.formats}
+        </div>
       </div>
 
       <div className="cv-modality-actions">
         {file ? (
           <>
-            <span className="cv-ready-badge">
-              ✓ Loaded
-            </span>
+            <span className="cv-ready-badge">✓ Loaded</span>
 
             <button
               className="cv-ghost-button"
-              onClick={() =>
-                inputRef.current?.click()
-              }
+              onClick={() => inputRef.current?.click()}
             >
               Replace
             </button>
 
-            <button
-              className="cv-ghost-button danger"
-              onClick={onRemove}
-            >
+            <button className="cv-ghost-button danger" onClick={onRemove}>
               Remove
             </button>
           </>
         ) : (
           <button
             className="cv-ghost-button"
-            onClick={() =>
-              inputRef.current?.click()
-            }
+            onClick={() => inputRef.current?.click()}
           >
             Select file
           </button>
@@ -1270,11 +1165,7 @@ function ModalityRow({
           type="file"
           accept={modality.accept}
           hidden
-          onChange={(event) =>
-            onUpload(
-              event.target.files?.[0]
-            )
-          }
+          onChange={(event) => onUpload(event.target.files?.[0])}
         />
       </div>
     </div>
@@ -1291,58 +1182,28 @@ function AnalysisLoader() {
       <div className="cv-loader-spinner" />
 
       <div>
-        <h3>
-          Running multimodal analysis
-        </h3>
+        <h3>Running echo segmentation</h3>
 
         <p>
-          Processing the available patient data
-          through modality-specific models and
-          preparing the fusion context.
+          Preprocessing the frame and running the UNet++ model, then
+          computing gradient saliency. First run also loads the weights.
         </p>
       </div>
 
       <div className="cv-loader-steps">
-        <LoaderStep
-          number="01"
-          text="Preprocessing"
-          active
-        />
-
-        <LoaderStep
-          number="02"
-          text="Modality inference"
-          active
-        />
-
-        <LoaderStep
-          number="03"
-          text="Multimodal reasoning"
-        />
-
-        <LoaderStep
-          number="04"
-          text="Explainability"
-        />
+        <LoaderStep number="01" text="Decoding image" active />
+        <LoaderStep number="02" text="Segmentation" active />
+        <LoaderStep number="03" text="Quantification" active />
+        <LoaderStep number="04" text="Explainability" active />
       </div>
     </div>
   );
 }
 
-function LoaderStep({
-  number,
-  text,
-  active,
-}) {
+function LoaderStep({ number, text, active }) {
   return (
-    <div
-      className={`cv-loader-step ${
-        active ? "active" : ""
-      }`}
-    >
-      <span>
-        {number}
-      </span>
+    <div className={`cv-loader-step ${active ? "active" : ""}`}>
+      <span>{number}</span>
 
       {text}
     </div>
@@ -1351,201 +1212,122 @@ function LoaderStep({
 
 /* ============================================================
    OVERVIEW RESULT
+
+   Summarises only what was actually computed. No aggregate
+   "case confidence" is shown, because nothing in this system
+   produces one.
    ============================================================ */
 
-function OverviewResult({
-  files,
-  clinicalData,
-}) {
+function OverviewResult({ echoResult, files, clinicalData, hasClinicalData }) {
+  const structures = echoResult?.structures || [];
+  const present = structures.filter((structure) => structure.present);
+  const calibrated = Boolean(echoResult?.input?.has_spatial_calibration);
+
+  // Derived from the model card rather than hardcoded, so adding a class
+  // to the model cannot leave a stale denominator on screen.
+  const foregroundCount = echoResult?.model?.num_classes
+    ? echoResult.model.num_classes - 1
+    : structures.length;
+
   return (
     <div className="cv-overview">
       <div className="cv-summary-card">
         <div className="cv-summary-main">
-          <span className="cv-card-kicker">
-            Primary model finding
-          </span>
+          <span className="cv-card-kicker">What was computed</span>
 
           <h3>
-            Cardiovascular abnormality detected
+            {echoResult
+              ? `Echocardiography segmented — ${present.length} of ${foregroundCount} structures identified`
+              : "No imaging analysis in this case"}
           </h3>
 
           <p>
-            The available case information indicates
-            findings that warrant further clinical review.
-            This result represents a research model output.
+            {echoResult
+              ? "The echo model outlined cardiac structures in the supplied " +
+                "frame. This is anatomical segmentation, not a diagnosis or " +
+                "a risk score."
+              : "Upload an echocardiography image to run the only trained " +
+                "imaging model."}
           </p>
         </div>
 
-        <div className="cv-summary-confidence">
-          <span>
-            Confidence
-          </span>
+        {echoResult && (
+          <div className="cv-summary-confidence">
+            <span>Model test Dice</span>
 
-          <strong>
-            87.4%
-          </strong>
-        </div>
+            <strong>{echoResult.model?.metrics?.test_dice}</strong>
+
+            <em>dataset-level, not per-case</em>
+          </div>
+        )}
       </div>
 
       <div className="cv-metric-grid">
         <Metric
-          label="Clinical risk"
-          value="Elevated"
-          tone="warning"
+          label="Echo segmentation"
+          value={echoResult ? "Complete" : "Not run"}
+          tone={echoResult ? "" : "muted"}
         />
 
-        <Metric
-          label="Echo finding"
-          value={
-            files.echo
-              ? "Analyzed"
-              : "Awaiting input"
-          }
-          tone={
-            files.echo
-              ? ""
-              : "muted"
-          }
-        />
+        <Metric label="CCTA" value="No model" tone="muted" />
 
-        <Metric
-          label="CCTA finding"
-          value={
-            files.ccta
-              ? "Analyzed"
-              : "Awaiting input"
-          }
-          tone={
-            files.ccta
-              ? ""
-              : "muted"
-          }
-        />
+        <Metric label="ECG" value="No model" tone="muted" />
 
-        <Metric
-          label="ECG"
-          value={
-            files.ecg
-              ? "Analyzed"
-              : "Awaiting input"
-          }
-          tone={
-            files.ecg
-              ? ""
-              : "muted"
-          }
-        />
+        <Metric label="Clinical risk score" value="No model" tone="muted" />
       </div>
 
       <div className="cv-findings-grid">
         <div className="cv-finding-card">
-          <span className="cv-card-kicker">
-            Key findings
-          </span>
+          <span className="cv-card-kicker">Segmentation findings</span>
 
-          <Finding
-            title="Coronary anatomy"
-            value="Potential abnormality"
-          />
+          {structures.length === 0 && (
+            <p className="cv-muted-text">No structures were segmented.</p>
+          )}
 
-          <Finding
-            title="Cardiac function"
-            value="Requires review"
-          />
-
-          <Finding
-            title="Clinical profile"
-            value={
-              clinicalData.hypertension
-                ? "Hypertension reported"
-                : "Available data reviewed"
-            }
-          />
+          {structures.map((structure) => (
+            <Finding
+              key={structure.class_index}
+              title={structure.name}
+              value={
+                structure.present
+                  ? calibrated && structure.area_cm2
+                    ? `${structure.area_cm2.toFixed(2)} cm²`
+                    : `${structure.area_percent.toFixed(1)}% of field`
+                  : "Not identified"
+              }
+              muted={!structure.present}
+            />
+          ))}
         </div>
 
         <div className="cv-finding-card cv-next-step">
-          <span className="cv-card-kicker">
-            Next step
-          </span>
+          <span className="cv-card-kicker">Case inputs</span>
 
-          <h3>
-            Review model evidence
-          </h3>
+          <h3>What this case contains</h3>
+
+          <ul className="cv-input-list">
+            <li>
+              Clinical data:{" "}
+              {hasClinicalData
+                ? `entered${clinicalData.age ? `, age ${clinicalData.age}` : ""}`
+                : "none entered"}
+            </li>
+
+            <li>Echo image: {files.echo ? files.echo.name : "none"}</li>
+
+            <li>
+              CCTA: {files.ccta ? `${files.ccta.name} (not analysed)` : "none"}
+            </li>
+
+            <li>
+              ECG: {files.ecg ? `${files.ecg.name} (not analysed)` : "none"}
+            </li>
+          </ul>
 
           <p>
-            Inspect modality-specific outputs and
-            explainability visualizations before drawing
+            Review the segmentation and explainability output before drawing
             any clinical conclusion.
           </p>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/* ============================================================
-   MODALITY RESULT
-   ============================================================ */
-
-function ModalityResult({
-  file,
-  label,
-  metricLabel,
-  metricValue,
-  confidence,
-  detail,
-}) {
-  return (
-    <div className="cv-modality-result">
-      <div className="cv-result-visual">
-        <div className="cv-result-visual-image">
-          <div className="cv-scan-grid">
-            <div />
-            <div />
-            <div />
-          </div>
-
-          <span className="cv-image-tag">
-            Model output
-          </span>
-        </div>
-
-        <div className="cv-image-caption">
-          <strong>
-            {label} analysis
-          </strong>
-
-          <span>
-            {file
-              ? `Analyzed: ${file.name}`
-              : `No ${label.toLowerCase()} file provided`}
-          </span>
-        </div>
-      </div>
-
-      <div className="cv-result-detail">
-        <span className="cv-card-kicker">
-          {label} model
-        </span>
-
-        <h3>
-          Structural analysis
-        </h3>
-
-        <p>
-          {detail}
-        </p>
-
-        <div className="cv-result-stat-row">
-          <Metric
-            label={metricLabel}
-            value={metricValue}
-          />
-
-          <Metric
-            label="Model confidence"
-            value={confidence}
-          />
         </div>
       </div>
     </div>
@@ -1556,80 +1338,64 @@ function ModalityResult({
    CLINICAL RESULT
    ============================================================ */
 
-function ClinicalResult({
-  clinicalData,
-}) {
+function ClinicalResult({ clinicalData }) {
+  const entries = [
+    ["Age", clinicalData.age],
+    ["Sex", clinicalData.sex],
+    ["Blood pressure", clinicalData.bloodPressure],
+    [
+      "Heart rate",
+      clinicalData.heartRate ? `${clinicalData.heartRate} bpm` : "",
+    ],
+  ];
+
+  const riskFactors = [
+    ["Diabetes", clinicalData.diabetes],
+    ["Hypertension", clinicalData.hypertension],
+    ["Smoking", clinicalData.smoking],
+  ].filter(([, value]) => value);
+
   return (
     <div className="cv-clinical-result">
+      <PendingModel
+        label="Clinical risk model"
+        note="There is no trained clinical prediction model, so these values are not scored and no risk level is computed."
+        requirement="notebooks/03_Clinical_Model.ipynb needs to be written and run, with the fitted model saved to models/clinical/."
+      />
+
       <div>
-        <span className="cv-card-kicker">
-          Clinical model
-        </span>
+        <span className="cv-card-kicker">Recorded values</span>
 
-        <h3>
-          Patient-level clinical assessment
-        </h3>
-
-        <p>
-          Structured clinical variables are processed by
-          the clinical prediction model and contribute to
-          the multimodal case representation.
+        <p className="cv-muted-text">
+          Passed to the language model as case context.
         </p>
-      </div>
 
-      <div className="cv-clinical-values">
-        <Metric
-          label="Age"
-          value={
-            clinicalData.age ||
-            "Not provided"
-          }
-          tone={
-            clinicalData.age
-              ? ""
-              : "muted"
-          }
-        />
+        <div className="cv-clinical-values">
+          {entries.map(([label, value]) => (
+            <Metric
+              key={label}
+              label={label}
+              value={value || "Not provided"}
+              tone={value ? "" : "muted"}
+            />
+          ))}
+        </div>
 
-        <Metric
-          label="Sex"
-          value={
-            clinicalData.sex ||
-            "Not provided"
-          }
-          tone={
-            clinicalData.sex
-              ? ""
-              : "muted"
-          }
-        />
+        {riskFactors.length > 0 && (
+          <div className="cv-risk-chips">
+            {riskFactors.map(([label]) => (
+              <span key={label}>{label}</span>
+            ))}
+          </div>
+        )}
 
-        <Metric
-          label="Blood pressure"
-          value={
-            clinicalData.bloodPressure ||
-            "Not provided"
-          }
-          tone={
-            clinicalData.bloodPressure
-              ? ""
-              : "muted"
-          }
-        />
+        {clinicalData.symptoms && (
+          <div className="cv-symptom-block">
+            <span className="cv-card-kicker">Reported symptoms</span>
 
-        <Metric
-          label="Heart rate"
-          value={
-            clinicalData.heartRate
-              ? `${clinicalData.heartRate} bpm`
-              : "Not provided"
-          }
-          tone={
-            clinicalData.heartRate
-              ? ""
-              : "muted"
-          }
-        />
+            <p>{clinicalData.symptoms}</p>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -1639,22 +1405,12 @@ function ClinicalResult({
    METRIC
    ============================================================ */
 
-function Metric({
-  label,
-  value,
-  tone = "",
-}) {
+function Metric({ label, value, tone = "" }) {
   return (
-    <div
-      className={`cv-metric ${tone}`}
-    >
-      <span>
-        {label}
-      </span>
+    <div className={`cv-metric ${tone}`}>
+      <span>{label}</span>
 
-      <strong>
-        {value}
-      </strong>
+      <strong>{value}</strong>
     </div>
   );
 }
@@ -1663,24 +1419,15 @@ function Metric({
    FINDING
    ============================================================ */
 
-function Finding({
-  title,
-  value,
-}) {
+function Finding({ title, value, muted }) {
   return (
-    <div className="cv-finding">
-      <div className="cv-finding-check">
-        ✓
-      </div>
+    <div className={`cv-finding ${muted ? "muted" : ""}`}>
+      <div className="cv-finding-check">{muted ? "○" : "✓"}</div>
 
       <div>
-        <strong>
-          {title}
-        </strong>
+        <strong>{title}</strong>
 
-        <span>
-          {value}
-        </span>
+        <span>{value}</span>
       </div>
     </div>
   );
@@ -1690,21 +1437,18 @@ function Finding({
    CONTEXT ITEM
    ============================================================ */
 
-function ContextItem({
-  label,
-  active,
-}) {
+function ContextItem({ label, active, unavailable }) {
   return (
     <div
-      className={`cv-context-item ${
-        active ? "active" : ""
+      className={`cv-context-item ${active ? "active" : ""} ${
+        unavailable ? "unavailable" : ""
       }`}
     >
-      <span>
-        {active ? "✓" : "○"}
-      </span>
+      <span>{active ? "✓" : unavailable ? "—" : "○"}</span>
 
       {label}
+
+      {unavailable && <em>no model</em>}
     </div>
   );
 }
@@ -1713,84 +1457,48 @@ function ContextItem({
    CHAT MESSAGE
    ============================================================ */
 
-function ChatMessage({
-  message,
-}) {
+function ChatMessage({ message }) {
+  const [showContext, setShowContext] = useState(false);
+
   return (
     <div
-      className={`cv-message ${
-        message.role
-      } ${message.error ? "error" : ""}`}
+      className={`cv-message ${message.role} ${message.error ? "error" : ""}`}
     >
       <div className="cv-message-role">
-        {message.role === "user"
-          ? "You"
-          : "CardioVision"}
+        {message.role === "user" ? "You" : "CardioVision"}
       </div>
 
-      <div className="cv-message-text">
-        {message.text}
-      </div>
+      <div className="cv-message-text">{message.text}</div>
 
-      {message.role === "assistant" &&
-        !message.error && (
-          <div className="cv-message-meta">
-            <span>
-              {message.model ||
-                "MedGemma 1.5 4B IT"}
-            </span>
+      {message.role === "assistant" && !message.error && (
+        <div className="cv-message-meta">
+          <span>{message.model}</span>
 
-            <span>·</span>
+          <span>·</span>
 
-            <span>
-              {message.device || "mps"}
-            </span>
+          <span>{message.device}</span>
 
-            <span>·</span>
+          <span>·</span>
 
-            <span>
-              Local inference
-            </span>
-          </div>
-        )}
+          <span>Local inference</span>
 
-      {message.evidence && (
-        <div className="cv-message-evidence">
-          <div className="cv-evidence-row">
-            <span>
-              Evidence
-            </span>
+          {message.contextUsed && (
+            <>
+              <span>·</span>
 
-            <strong>
-              {message.evidence.finding}
-            </strong>
-          </div>
-
-          <div className="cv-evidence-row">
-            <span>
-              Model confidence
-            </span>
-
-            <strong>
-              {message.evidence.confidence}
-            </strong>
-          </div>
-
-          {message.evidence.context
-            ?.length > 0 && (
-            <div className="cv-evidence-row">
-              <span>
-                Clinical context
-              </span>
-
-              <strong>
-                {message.evidence.context.join(
-                  " · "
-                )}
-              </strong>
-            </div>
+              <button
+                className="cv-context-toggle"
+                onClick={() => setShowContext((previous) => !previous)}
+              >
+                {showContext ? "Hide case context" : "Show case context"}
+              </button>
+            </>
           )}
         </div>
+      )}
+
+      {showContext && message.contextPreview && (
+        <pre className="cv-context-preview">{message.contextPreview}</pre>
       )}
     </div>
   );

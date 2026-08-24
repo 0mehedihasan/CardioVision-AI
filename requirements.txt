@@ -1,0 +1,53 @@
+# ============================================================
+# CardioVision AI — Python dependencies
+#
+# Install:
+#   python3 -m venv .venv
+#   source .venv/bin/activate
+#   pip install -r requirements.txt
+#
+# Notes:
+#   - torch is installed from the default index; on Apple Silicon
+#     this gives you the MPS-enabled build automatically.
+#   - segmentation-models-pytorch + timm are required to rebuild the
+#     UNet++ / EfficientNet-B3 echo architecture before loading the
+#     trained checkpoint. The encoder is built with
+#     encoder_weights=None, so no ImageNet download is needed at
+#     inference time and the backend stays fully offline.
+# ============================================================
+
+# --- API server ---
+fastapi>=0.115
+uvicorn[standard]>=0.30
+python-multipart>=0.0.9        # required for multipart file upload
+pydantic>=2.7
+
+# --- Deep learning runtime ---
+torch>=2.3
+transformers>=4.45             # MedGemma (AutoModelForImageTextToText)
+accelerate>=0.30               # device_map support
+safetensors>=0.4
+sentencepiece>=0.2             # MedGemma tokenizer
+
+# --- Echo segmentation model (UNet++ / EfficientNet-B3) ---
+segmentation-models-pytorch>=0.3.3
+timm>=0.9.7
+
+# --- Medical image I/O ---
+nibabel>=5.2                   # NIfTI (.nii, .nii.gz) — native CAMUS format
+pydicom>=2.4                   # DICOM (.dcm), including multi-frame cine loops
+pylibjpeg>=2.0                 # JPEG-compressed DICOM transfer syntaxes
+pylibjpeg-libjpeg>=2.1
+Pillow>=10.3                   # PNG / JPEG
+numpy>=1.26
+
+# ============================================================
+# Notebook / training only (not needed to run the backend).
+# Uncomment if you want to re-run notebooks/02_Echo_Training.ipynb
+# locally instead of on Kaggle.
+# ============================================================
+# pandas>=2.2
+# matplotlib>=3.8
+# scikit-learn>=1.4
+# tqdm>=4.66
+# jupyter>=1.0
