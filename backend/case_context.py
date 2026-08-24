@@ -16,6 +16,42 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from config import MODALITY_STATUS
+from database import derive_age
+
+
+# ============================================================
+# PATIENT SECTION
+# ============================================================
+
+def _patient_lines(patient: dict[str, Any]) -> list[str]:
+    """
+    Demographics as recorded on the case.
+
+    The name is deliberately NOT sent. It adds nothing a clinical answer can
+    use, and keeping identifiers out of the prompt limits how far they travel
+    even within a local process.
+    """
+    lines: list[str] = []
+
+    # Derived from the date of birth rather than taken from the typed clinical
+    # age, which goes stale the moment a birthday passes.
+    age = derive_age(patient.get("dateOfBirth") or "")
+    if age is not None:
+        lines.append(f"  Age: {age} years (derived from date of birth)")
+
+    sex = (patient.get("sex") or "").strip()
+    if sex:
+        lines.append(f"  Sex: {sex}")
+
+    study_date = (patient.get("studyDate") or "").strip()
+    if study_date:
+        lines.append(f"  Study date: {study_date}")
+
+    notes = (patient.get("notes") or "").strip()
+    if notes:
+        lines.append(f"  Clinician's notes: {notes}")
+
+    return lines
 
 
 # ============================================================
@@ -36,12 +72,17 @@ _RISK_FACTORS = (
 )
 
 
-def _clinical_lines(clinical: dict[str, Any]) -> list[str]:
+def _clinical_lines(clinical: dict[str, Any], has_patient_age: bool = False) -> list[str]:
     lines: list[str] = []
 
     for key, label in _CLINICAL_LABELS:
         value = clinical.get(key)
         if value in (None, "", False):
+            continue
+
+        # A date of birth is authoritative, so the typed age is redundant and
+        # can contradict it. Emitting both would leave the model to pick.
+        if key == "age" and has_patient_age:
             continue
 
         if key == "heartRate":
@@ -266,9 +307,22 @@ def build_case_context(case: Optional[dict[str, Any]]) -> Optional[str]:
     if case_id:
         sections.append(f"Case ID: {case_id}")
 
+    # ---- patient -------------------------------------------------
+    patient = case.get("patient") or {}
+    patient_lines = _patient_lines(patient)
+
+    if patient_lines:
+        sections.append(
+            "PATIENT (recorded by the clinician; the name is withheld from "
+            "this prompt):\n" + "\n".join(patient_lines)
+        )
+
     # ---- clinical ------------------------------------------------
     clinical = case.get("clinical") or {}
-    clinical_lines = _clinical_lines(clinical)
+    clinical_lines = _clinical_lines(
+        clinical,
+        has_patient_age=derive_age(patient.get("dateOfBirth") or "") is not None,
+    )
 
     if clinical_lines:
         sections.append(
@@ -297,7 +351,7 @@ def build_case_context(case: Optional[dict[str, Any]]) -> Optional[str]:
         )
 
     # Only the boilerplate sections and nothing real to report.
-    if not clinical_lines and not echo_analyzed:
+    if not clinical_lines and not echo_analyzed and not patient_lines:
         return None
 
     return "\n\n".join(sections).strip()

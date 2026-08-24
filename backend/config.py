@@ -23,6 +23,37 @@ ECHO_CHECKPOINT_PATH = (
     MODELS_DIR / "echo" / "cardiovision_echo_unetplusplus_best.pth"
 )
 
+# ---- case storage ------------------------------------------------
+#
+# Saved cases live entirely on this machine. The database holds patient
+# details and findings; the rendered PNGs and original uploads are written
+# alongside it as files, because a few megabytes of base64 per case would
+# bloat every row and slow down the case list.
+
+DATA_DIR = PROJECT_ROOT / "data"
+
+CASE_DB_PATH = DATA_DIR / "cardiovision.db"
+
+CASE_FILES_DIR = DATA_DIR / "cases"
+
+
+# ============================================================
+# AUTHENTICATION
+# ============================================================
+#
+# One fixed operator account. Override both values with the environment
+# variables CARDIOVISION_USER and CARDIOVISION_PASSWORD; the defaults exist
+# so the app is usable out of the box, not because they are secure.
+#
+# See backend/auth.py for what this does and does not protect against.
+
+AUTH_DEFAULT_USERNAME = "medexpert"
+AUTH_DEFAULT_PASSWORD = "1111"
+
+# Eight hours: long enough for a working day, short enough that a forgotten
+# session does not stay open indefinitely. Expiry slides on each request.
+AUTH_SESSION_TTL_SECONDS = 8 * 60 * 60
+
 
 # ============================================================
 # DEVICE

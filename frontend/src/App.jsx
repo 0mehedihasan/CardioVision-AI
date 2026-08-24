@@ -2,8 +2,25 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import "./App.css";
 
-import { askClinicalQuestion, analyzeEcho, fetchHealth } from "./api";
+import {
+  analyzeEcho,
+  askClinicalQuestion,
+  deleteCase,
+  fetchCase,
+  fetchCaseImages,
+  fetchCases,
+  fetchHealth,
+  fetchSession,
+  login,
+  logout,
+  releaseImages,
+  saveCase,
+  setUnauthorizedHandler,
+} from "./api";
+import CaseList from "./components/CaseList";
 import EchoResult from "./components/EchoResult";
+import Login from "./components/Login";
+import PatientForm from "./components/PatientForm";
 import PendingModel from "./components/PendingModel";
 
 const initialClinicalData = {
@@ -15,6 +32,16 @@ const initialClinicalData = {
   diabetes: false,
   hypertension: false,
   smoking: false,
+};
+
+const initialPatientData = {
+  name: "",
+  mrn: "",
+  dateOfBirth: "",
+  sex: "",
+  studyDate: "",
+  referringClinician: "",
+  notes: "",
 };
 
 const modalityConfig = {
@@ -51,57 +78,21 @@ const navItems = [
   { id: "assistant", number: "04", label: "Case assistant" },
 ];
 
+/* ============================================================
+   APP — AUTHENTICATION GATE
+
+   Nothing below this component renders until the backend has
+   confirmed a session, and any 401 from any call drops straight
+   back here.
+   ============================================================ */
+
 function App() {
-  const [clinicalData, setClinicalData] = useState(initialClinicalData);
-  const [files, setFiles] = useState({
-    echo: null,
-    ccta: null,
-    ecg: null,
-  });
-
-  const [dragOver, setDragOver] = useState(null);
-
-  const [activeSection, setActiveSection] = useState("case");
-  const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [analysisComplete, setAnalysisComplete] = useState(false);
-  const [activeResult, setActiveResult] = useState("overview");
-
-  /* Real backend state */
   const [health, setHealth] = useState(null);
   const [healthError, setHealthError] = useState(null);
-  const [echoResult, setEchoResult] = useState(null);
-  const [analysisError, setAnalysisError] = useState(null);
 
-  /* Explicit image geometry. Defaults to no transform: the backend never
-     guesses an orientation, and neither does this UI. */
-  const [echoRotate, setEchoRotate] = useState(0);
-  const [echoFlip, setEchoFlip] = useState(false);
-
-  const [question, setQuestion] = useState("");
-  const [conversation, setConversation] = useState([]);
-  const [isAsking, setIsAsking] = useState(false);
-
-  const echoInput = useRef(null);
-  const cctaInput = useRef(null);
-  const ecgInput = useRef(null);
-
-  const inputRefs = {
-    echo: echoInput,
-    ccta: cctaInput,
-    ecg: ecgInput,
-  };
-
-  const patientId = useMemo(
-    () => `CV-${new Date().getFullYear()}-001`,
-    []
-  );
-
-  /* ==========================================================
-     BACKEND HEALTH
-
-     The UI advertises capabilities based on what the backend
-     actually reports, so it can never claim a model it lacks.
-     ========================================================== */
+  const [session, setSession] = useState(null);
+  const [authChecked, setAuthChecked] = useState(false);
+  const [authNotice, setAuthNotice] = useState(null);
 
   const loadHealth = useCallback(async () => {
     try {
@@ -118,204 +109,270 @@ function App() {
     loadHealth();
   }, [loadHealth]);
 
-  const echoModelReady = Boolean(health?.modalities?.echo?.available);
-  const medgemmaReady = Boolean(health?.models?.medgemma?.loaded);
-  const backendOnline = Boolean(health);
+  /* One handler for every expired or rejected token, registered on the API
+     client so no individual call has to remember to check. */
+  useEffect(() => {
+    setUnauthorizedHandler((message) => {
+      setSession(null);
+      setAuthNotice(message);
+    });
 
-  const uploadedCount = Object.values(files).filter(Boolean).length;
+    return () => setUnauthorizedHandler(null);
+  }, []);
 
-  const hasClinicalData = Object.values(clinicalData).some(
-    (value) => value !== "" && value !== false
+  /* Revalidate a token left in sessionStorage by a page refresh. */
+  useEffect(() => {
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const existing = await fetchSession();
+
+        if (!cancelled && existing) {
+          setSession(existing);
+        }
+      } catch {
+        // A backend that is down or unreachable is not a valid session.
+        // The login screen reports the real reason.
+      } finally {
+        if (!cancelled) setAuthChecked(true);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const signIn = useCallback(
+    async (username, password) => {
+      const data = await login(username, password);
+
+      setAuthNotice(null);
+      setSession(data);
+
+      // The saved-case count and model state may have changed since the
+      // login screen first loaded.
+      loadHealth();
+    },
+    [loadHealth]
   );
 
-  /* Analysis needs an echo image: it is the only trained imaging model. */
-  const canAnalyze = Boolean(files.echo) && echoModelReady && !isAnalyzing;
+  const signOut = useCallback(async () => {
+    await logout();
 
-  const updateClinical = (field, value) => {
-    setClinicalData((previous) => ({
-      ...previous,
-      [field]: value,
-    }));
-  };
+    setSession(null);
+    setAuthNotice(null);
+  }, []);
 
-  const handleFile = (modality, file) => {
-    if (!file) return;
+  if (!authChecked) {
+    return (
+      <div className="cv-boot">
+        <div className="cv-loader-spinner" />
 
-    setFiles((previous) => ({
-      ...previous,
-      [modality]: file,
-    }));
+        <span>Starting CardioVision…</span>
+      </div>
+    );
+  }
 
-    if (modality === "echo") {
-      setAnalysisComplete(false);
-      setEchoResult(null);
-      setAnalysisError(null);
-      // A new image gets a clean slate: the previous file's rotation says
-      // nothing about how this one was exported.
-      setEchoRotate(0);
-      setEchoFlip(false);
+  if (!session) {
+    return (
+      <>
+        {authNotice && (
+          <div className="cv-session-notice" role="status">
+            {authNotice}
+          </div>
+        )}
+
+        <Login
+          health={health}
+          healthError={healthError}
+          onRetryHealth={loadHealth}
+          onSignIn={signIn}
+        />
+      </>
+    );
+  }
+
+  return (
+    <Workspace
+      session={session}
+      health={health}
+      healthError={healthError}
+      onReloadHealth={loadHealth}
+      onSignOut={signOut}
+    />
+  );
+}
+
+/* ============================================================
+   WORKSPACE — SHELL, CASE LIST, CASE SWITCHING
+
+   Owns the saved-case list and which case is open. The case
+   itself lives in CaseWorkspace, keyed so that switching or
+   starting a case remounts it. A remount is the only reset that
+   cannot silently leave a stale field behind — which is exactly
+   what made the old "New case" button do nothing.
+   ============================================================ */
+
+function Workspace({
+  session,
+  health,
+  healthError,
+  onReloadHealth,
+  onSignOut,
+}) {
+  const [cases, setCases] = useState([]);
+  const [casesTotal, setCasesTotal] = useState(0);
+  const [casesLoading, setCasesLoading] = useState(true);
+  const [casesError, setCasesError] = useState(null);
+  const [searchTerm, setSearchTerm] = useState("");
+
+  /* Bumping this key remounts CaseWorkspace with `openedCase` as its seed. */
+  const [caseKey, setCaseKey] = useState(0);
+  const [openedCase, setOpenedCase] = useState(null);
+
+  const [activeSection, setActiveSection] = useState("case");
+  const [switchError, setSwitchError] = useState(null);
+  const [isSwitching, setIsSwitching] = useState(false);
+
+  /* Published upward by the open case so the header can save it and warn
+     about unsaved work without owning any of its state. */
+  const [caseStatus, setCaseStatus] = useState(null);
+
+  const storageReady = Boolean(health?.storage?.ready);
+
+  const loadCases = useCallback(async (term = "") => {
+    setCasesLoading(true);
+
+    try {
+      const data = await fetchCases(term);
+
+      setCases(data.cases || []);
+      setCasesTotal(data.total ?? (data.cases || []).length);
+      setCasesError(null);
+    } catch (error) {
+      // A 401 is already handled globally; showing it here too would just
+      // flash an error as the app returns to the login screen.
+      if (error.status !== 401) {
+        setCasesError(error.message);
+      }
+    } finally {
+      setCasesLoading(false);
     }
-  };
+  }, []);
 
-  const removeFile = (modality) => {
-    setFiles((previous) => ({
-      ...previous,
-      [modality]: null,
-    }));
+  const handleSearch = useCallback(
+    (term) => {
+      setSearchTerm(term);
+      loadCases(term);
+    },
+    [loadCases]
+  );
 
-    if (modality === "echo") {
-      setAnalysisComplete(false);
-      setEchoResult(null);
-      setAnalysisError(null);
-      setEchoRotate(0);
-      setEchoFlip(false);
-    }
-  };
+  const refreshCases = useCallback(() => {
+    loadCases(searchTerm);
+  }, [loadCases, searchTerm]);
 
   const scrollToSection = useCallback((section) => {
     setActiveSection(section);
 
-    const element = document.getElementById(section);
-
-    if (element) {
-      element.scrollIntoView({
-        behavior: "smooth",
-        block: "start",
-      });
-    }
+    document.getElementById(section)?.scrollIntoView({
+      behavior: "smooth",
+      block: "start",
+    });
   }, []);
 
   /* ==========================================================
-     REAL ANALYSIS
+     UNSAVED-WORK GUARD
 
-     Calls POST /api/analyze/echo and renders the model's actual
-     output. There are no simulated results and no placeholder
-     metrics anywhere in this flow.
+     Switching or resetting throws away whatever is in the form.
+     Anything unsaved gets one confirmation first.
      ========================================================== */
 
-  const runAnalysis = useCallback(
-    async (overrides = {}) => {
-      if (!files.echo || !echoModelReady || isAnalyzing) return;
+  const confirmDiscard = useCallback(
+    (action) => {
+      if (!caseStatus?.dirty) return true;
 
-      const rotate = overrides.rotate ?? echoRotate;
-      const flip = overrides.flip ?? echoFlip;
+      return window.confirm(
+        `This case has unsaved changes. ${action} anyway?\n\n` +
+          "Press Cancel to go back and save it first."
+      );
+    },
+    [caseStatus]
+  );
 
-      setIsAnalyzing(true);
-      setAnalysisError(null);
-      setEchoResult(null);
-      setAnalysisComplete(false);
-      setEchoRotate(rotate);
-      setEchoFlip(flip);
+  const startNewCase = useCallback(() => {
+    if (!confirmDiscard("Start a new case")) return;
 
-      scrollToSection("results");
+    setOpenedCase(null);
+    setSwitchError(null);
+    setCaseStatus(null);
+    setCaseKey((previous) => previous + 1);
+
+    scrollToSection("case");
+  }, [confirmDiscard, scrollToSection]);
+
+  const openCase = useCallback(
+    async (caseId) => {
+      if (caseId === caseStatus?.caseId) {
+        scrollToSection("case");
+        return;
+      }
+
+      if (!confirmDiscard("Open another case")) return;
+
+      setIsSwitching(true);
+      setSwitchError(null);
 
       try {
-        const result = await analyzeEcho(files.echo, { rotate, flip });
+        const record = await fetchCase(caseId);
 
-        setEchoResult(result);
-        setAnalysisComplete(true);
-        setActiveResult("echo");
+        setOpenedCase(record);
+        setCaseStatus(null);
+        setCaseKey((previous) => previous + 1);
+
+        scrollToSection("case");
       } catch (error) {
-        setAnalysisError(error.message);
-        // Refresh health so the UI reflects a backend that went away.
-        loadHealth();
+        if (error.status !== 401) {
+          setSwitchError(error.message);
+        }
       } finally {
-        setIsAnalyzing(false);
+        setIsSwitching(false);
       }
     },
-    [files.echo, echoModelReady, isAnalyzing, echoRotate, echoFlip, loadHealth]
+    [caseStatus, confirmDiscard, scrollToSection]
   );
 
-  /* Re-run the same image at a different rotation. Used by the orientation
-     control in the echo result, since a display-oriented upload is a
-     quarter turn away from the training distribution. */
-  const reanalyzeWithOrientation = useCallback(
-    (rotate, flip) => runAnalysis({ rotate, flip }),
-    [runAnalysis]
+  const removeCase = useCallback(
+    async (caseId) => {
+      try {
+        await deleteCase(caseId);
+
+        // Deleting the case that is open would leave the form editing a
+        // record that no longer exists, so clear it out.
+        if (caseId === caseStatus?.caseId) {
+          setOpenedCase(null);
+          setCaseStatus(null);
+          setCaseKey((previous) => previous + 1);
+        }
+
+        refreshCases();
+        onReloadHealth();
+      } catch (error) {
+        if (error.status !== 401) {
+          setSwitchError(error.message);
+        }
+      }
+    },
+    [caseStatus, refreshCases, onReloadHealth]
   );
 
-  /* ==========================================================
-     CASE STATE FOR THE LANGUAGE MODEL
+  const initials = (session?.username || "user").slice(0, 2).toUpperCase();
 
-     Sent structured; the backend renders it into prompt text,
-     including an explicit list of unavailable modalities so the
-     model cannot invent CCTA or ECG findings.
-     ========================================================== */
-
-  const caseState = useMemo(
-    () => ({
-      case_id: patientId,
-      clinical: clinicalData,
-      echo: echoResult
-        ? {
-            analyzed: true,
-            model: echoResult.model,
-            structures: echoResult.structures,
-            input: echoResult.input,
-            // Both bear on how far the findings can be trusted, so the
-            // backend needs them to caveat the prompt honestly.
-            orientation: echoResult.orientation,
-            quantification: echoResult.quantification,
-          }
-        : { analyzed: false },
-      modalities_provided: {
-        echo: Boolean(files.echo),
-        ccta: Boolean(files.ccta),
-        ecg: Boolean(files.ecg),
-      },
-    }),
-    [patientId, clinicalData, echoResult, files]
-  );
-
-  const askQuestion = async (text) => {
-    const trimmed = (text ?? question).trim();
-
-    if (!trimmed || isAsking) return;
-
-    setConversation((previous) => [
-      ...previous,
-      { role: "user", text: trimmed },
-    ]);
-
-    setQuestion("");
-    setIsAsking(true);
-
-    try {
-      const data = await askClinicalQuestion(trimmed, caseState);
-
-      setConversation((previous) => [
-        ...previous,
-        {
-          role: "assistant",
-          text:
-            data.answer ||
-            "No response was returned by the clinical language model.",
-          model: data.model,
-          device: data.device,
-          contextUsed: data.context_used,
-          contextPreview: data.context_preview,
-        },
-      ]);
-    } catch (error) {
-      setConversation((previous) => [
-        ...previous,
-        {
-          role: "assistant",
-          text: error.message,
-          error: true,
-        },
-      ]);
-    } finally {
-      setIsAsking(false);
-    }
-  };
-
-  const contextItems = [
-    { label: "Clinical", active: hasClinicalData },
-    { label: "Echo findings", active: Boolean(echoResult) },
-    { label: "CCTA", active: false, unavailable: true },
-    { label: "ECG", active: false, unavailable: true },
-  ];
+  const echoModelReady = Boolean(health?.modalities?.echo?.available);
+  const medgemmaReady = Boolean(health?.models?.medgemma?.loaded);
+  const backendOnline = Boolean(health);
 
   return (
     <div className="cv-shell">
@@ -351,13 +408,44 @@ function App() {
 
         <div className="cv-header-actions">
           <button
-            className="cv-header-button"
-            onClick={() => scrollToSection("case")}
+            className={`cv-header-button primary ${
+              caseStatus?.saving ? "loading" : ""
+            }`}
+            disabled={
+              !caseStatus?.canSave || caseStatus?.saving || !storageReady
+            }
+            title={
+              storageReady
+                ? "Save this case to the local database"
+                : "The case database is unavailable"
+            }
+            onClick={() => caseStatus?.save?.()}
           >
+            {caseStatus?.saving ? (
+              <>
+                <span className="cv-button-spinner" />
+                Saving
+              </>
+            ) : caseStatus?.dirty || !caseStatus?.caseId ? (
+              "Save case"
+            ) : (
+              "Saved"
+            )}
+          </button>
+
+          <button className="cv-header-button" onClick={startNewCase}>
             New case
           </button>
 
-          <div className="cv-user-avatar">MH</div>
+          <div className="cv-user">
+            <div className="cv-user-avatar" title={session?.username}>
+              {initials}
+            </div>
+
+            <button className="cv-signout-button" onClick={onSignOut}>
+              Sign out
+            </button>
+          </div>
         </div>
       </header>
 
@@ -399,6 +487,20 @@ function App() {
             </button>
           ))}
 
+          <div className="cv-sidebar-divider" />
+
+          <CaseList
+            cases={cases}
+            total={casesTotal}
+            activeCaseId={caseStatus?.caseId || null}
+            isLoading={casesLoading || isSwitching}
+            error={casesError}
+            onSearch={handleSearch}
+            onOpen={openCase}
+            onDelete={removeCase}
+            onRefresh={refreshCases}
+          />
+
           <div className="cv-sidebar-spacer" />
 
           <div className="cv-local-card">
@@ -418,564 +520,1146 @@ function App() {
             MAIN
         ==================================================== */}
 
-        <main className="cv-main">
-          {/* ==================================================
-              HERO
-          ================================================== */}
+        <CaseWorkspace
+          key={caseKey}
+          initialCase={openedCase}
+          health={health}
+          healthError={healthError}
+          storageReady={storageReady}
+          switchError={switchError}
+          onReloadHealth={onReloadHealth}
+          onCasesChanged={refreshCases}
+          onStatus={setCaseStatus}
+          onNewCase={startNewCase}
+          scrollToSection={scrollToSection}
+        />
+      </div>
+    </div>
+  );
+}
 
-          <section className="cv-hero">
-            <div className="cv-eyebrow">Cardiovascular AI platform</div>
+/* ============================================================
+   CASE WORKSPACE
 
-            <h1>Understand the heart through multimodal AI.</h1>
+   Everything belonging to one patient case. Remounted whenever
+   the open case changes, so its initial state is built once from
+   `initialCase` and never has to be reconciled afterwards.
+   ============================================================ */
+
+function CaseWorkspace({
+  initialCase,
+  health,
+  healthError,
+  storageReady,
+  switchError,
+  onReloadHealth,
+  onCasesChanged,
+  onStatus,
+  onNewCase,
+  scrollToSection,
+}) {
+  /* ---- seeded from the loaded record, if any ---------------- */
+
+  const [caseId, setCaseId] = useState(initialCase?.case_id || null);
+  const [createdAt] = useState(initialCase?.created_at || null);
+  const [savedAt, setSavedAt] = useState(initialCase?.updated_at || null);
+
+  const [patientData, setPatientData] = useState(() =>
+    // Every field is coerced to a string: SQLite hands back NULL for columns
+    // that were never filled in, and a null `value` turns a controlled input
+    // back into an uncontrolled one, which React then refuses to update.
+    Object.fromEntries(
+      Object.keys(initialPatientData).map((field) => [
+        field,
+        initialCase?.patient?.[field] ?? "",
+      ])
+    )
+  );
+
+  const [clinicalData, setClinicalData] = useState(() => {
+    const stored = initialCase?.clinical || {};
+
+    // Keyed off the blank form rather than spreading the stored object, so a
+    // stray key from an older record cannot end up counting as clinical data.
+    return Object.fromEntries(
+      Object.entries(initialClinicalData).map(([field, fallback]) => [
+        field,
+        stored[field] ?? fallback,
+      ])
+    );
+  });
+
+  const [echoResult, setEchoResult] = useState(initialCase?.echo || null);
+  const [echoRotate, setEchoRotate] = useState(
+    initialCase?.echo?.orientation?.rotation_applied || 0
+  );
+  const [echoFlip, setEchoFlip] = useState(
+    Boolean(initialCase?.echo?.orientation?.flip_applied)
+  );
+  const [analysisComplete, setAnalysisComplete] = useState(
+    Boolean(initialCase?.echo)
+  );
+  const [activeResult, setActiveResult] = useState(
+    initialCase?.echo ? "echo" : "overview"
+  );
+
+  const [conversation, setConversation] = useState(
+    initialCase?.conversation || []
+  );
+
+  /* A restored case has no File objects — the upload itself is archived
+     server-side, but the browser cannot reconstitute a File from it. The
+     archived filename is kept so the UI can still say what was analysed. */
+  const [files, setFiles] = useState({ echo: null, ccta: null, ecg: null });
+  const restoredFilename =
+    initialCase?.echo?.input?.filename || initialCase?.source_file || "";
+
+  const [dragOver, setDragOver] = useState(null);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [analysisError, setAnalysisError] = useState(null);
+
+  const [question, setQuestion] = useState("");
+  const [isAsking, setIsAsking] = useState(false);
+
+  const [dirty, setDirty] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveError, setSaveError] = useState(null);
+
+  const echoInput = useRef(null);
+  const cctaInput = useRef(null);
+  const ecgInput = useRef(null);
+
+  const inputRefs = { echo: echoInput, ccta: cctaInput, ecg: ecgInput };
+
+  const echoModelReady = Boolean(health?.modalities?.echo?.available);
+  const medgemmaReady = Boolean(health?.models?.medgemma?.loaded);
+  const backendOnline = Boolean(health);
+
+  /* ==========================================================
+     RESTORED IMAGES
+
+     Stored renders come back as authenticated endpoints, which an
+     <img> tag cannot fetch on its own. They are pulled as blobs
+     and spliced into the restored result, then revoked on unmount
+     so switching between cases does not leak them.
+     ========================================================== */
+
+  const blobUrls = useRef(null);
+
+  useEffect(() => {
+    const stored = initialCase?.images;
+
+    if (!stored || Object.keys(stored).length === 0) return undefined;
+
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const urls = await fetchCaseImages(
+          initialCase.case_id,
+          Object.keys(stored)
+        );
+
+        if (cancelled) {
+          releaseImages(urls);
+          return;
+        }
+
+        blobUrls.current = urls;
+
+        setEchoResult((previous) =>
+          previous ? { ...previous, images: urls } : previous
+        );
+      } catch {
+        // The findings and measurements are already on screen; a failed
+        // image fetch degrades the view rather than breaking the case.
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [initialCase]);
+
+  useEffect(
+    () => () => {
+      releaseImages(blobUrls.current);
+      blobUrls.current = null;
+    },
+    []
+  );
+
+  /* ==========================================================
+     DERIVED
+     ========================================================== */
+
+  const hasClinicalData = Object.values(clinicalData).some(
+    (value) => value !== "" && value !== false && value !== null
+  );
+
+  const hasPatientData = Object.values(patientData).some(
+    (value) => typeof value === "string" && value.trim() !== ""
+  );
+
+  const canAnalyze = Boolean(files.echo) && echoModelReady && !isAnalyzing;
+
+  /* Nothing to write is not an error, but it should not be a save either. */
+  const canSave =
+    hasPatientData ||
+    hasClinicalData ||
+    Boolean(echoResult) ||
+    conversation.length > 0;
+
+  const updatePatient = (field, value) => {
+    setPatientData((previous) => ({ ...previous, [field]: value }));
+    setDirty(true);
+  };
+
+  const updateClinical = (field, value) => {
+    setClinicalData((previous) => ({ ...previous, [field]: value }));
+    setDirty(true);
+  };
+
+  const handleFile = (modality, file) => {
+    if (!file) return;
+
+    setFiles((previous) => ({ ...previous, [modality]: file }));
+    setDirty(true);
+
+    if (modality === "echo") {
+      setAnalysisComplete(false);
+      setEchoResult(null);
+      setAnalysisError(null);
+      // A new image gets a clean slate: the previous file's rotation says
+      // nothing about how this one was exported.
+      setEchoRotate(0);
+      setEchoFlip(false);
+    }
+  };
+
+  const removeFile = (modality) => {
+    setFiles((previous) => ({ ...previous, [modality]: null }));
+    setDirty(true);
+
+    if (modality === "echo") {
+      setAnalysisComplete(false);
+      setEchoResult(null);
+      setAnalysisError(null);
+      setEchoRotate(0);
+      setEchoFlip(false);
+    }
+  };
+
+  /* ==========================================================
+     PERSISTENCE
+
+     One writer for every save path — the explicit button, the
+     automatic save around an analysis, and the save after an
+     assistant reply — so a case can never be written two
+     different ways.
+     ========================================================== */
+
+  const persist = useCallback(
+    async (overrides = {}) => {
+      const { silent = false, echo = echoResult, messages = conversation } =
+        overrides;
+
+      const payload = {
+        case_id: overrides.caseId ?? caseId ?? undefined,
+        patient: patientData,
+        clinical: clinicalData,
+        conversation: messages,
+      };
+
+      if (echo) {
+        // The rendered PNGs travel separately: the backend decodes them to
+        // files, so keeping the data URLs in echo_json would store every
+        // image twice.
+        const { images, ...rest } = echo;
+
+        payload.echo = { ...rest, analyzed: true };
+
+        if (images) {
+          // Blob URLs come from a case that is already stored; only fresh
+          // data URLs need writing.
+          const encoded = Object.fromEntries(
+            Object.entries(images).filter(
+              ([, value]) =>
+                typeof value === "string" && value.startsWith("data:")
+            )
+          );
+
+          if (Object.keys(encoded).length > 0) {
+            payload.images = encoded;
+          }
+        }
+      }
+
+      setIsSaving(true);
+
+      if (!silent) setSaveError(null);
+
+      try {
+        const stored = await saveCase(payload);
+
+        // Adopt the backend's ID and timestamps rather than guessing them.
+        setCaseId(stored.case_id);
+        setSavedAt(stored.updated_at);
+        setDirty(false);
+        setSaveError(null);
+
+        onCasesChanged();
+
+        return stored;
+      } catch (error) {
+        if (error.status !== 401) {
+          setSaveError(error.message);
+        }
+        return null;
+      } finally {
+        setIsSaving(false);
+      }
+    },
+    [caseId, patientData, clinicalData, echoResult, conversation, onCasesChanged]
+  );
+
+  /* Publish just enough for the header to drive Save and to warn before
+     discarding. Everything else stays private to this component. */
+  useEffect(() => {
+    onStatus({
+      caseId,
+      dirty,
+      saving: isSaving,
+      canSave,
+      save: () => persist(),
+    });
+  }, [caseId, dirty, isSaving, canSave, persist, onStatus]);
+
+  /* ==========================================================
+     ANALYSIS
+
+     Calls POST /api/analyze/echo and renders the model's actual
+     output. There are no simulated results anywhere in this flow.
+     ========================================================== */
+
+  const runAnalysis = useCallback(
+    async (overrides = {}) => {
+      if (!files.echo || !echoModelReady || isAnalyzing) return;
+
+      const rotate = overrides.rotate ?? echoRotate;
+      const flip = overrides.flip ?? echoFlip;
+
+      setIsAnalyzing(true);
+      setAnalysisError(null);
+      setEchoResult(null);
+      setAnalysisComplete(false);
+      setEchoRotate(rotate);
+      setEchoFlip(flip);
+
+      scrollToSection("results");
+
+      /* The case row has to exist before analysis so the backend can file
+         the source image under it. Running a study is a real commitment,
+         so creating the record at that moment is the honest behaviour —
+         and it is what stops a completed analysis from evaporating on
+         refresh. */
+      let targetCase = caseId;
+
+      if (!targetCase && storageReady) {
+        const stored = await persist({ silent: true });
+        targetCase = stored?.case_id || null;
+      }
+
+      try {
+        const result = await analyzeEcho(files.echo, {
+          rotate,
+          flip,
+          caseId: targetCase || undefined,
+        });
+
+        setEchoResult(result);
+        setAnalysisComplete(true);
+        setActiveResult("echo");
+
+        if (storageReady) {
+          await persist({
+            silent: true,
+            echo: result,
+            caseId: targetCase || undefined,
+          });
+        } else {
+          setDirty(true);
+        }
+      } catch (error) {
+        setAnalysisError(error.message);
+        // Refresh health so the UI reflects a backend that went away.
+        onReloadHealth();
+      } finally {
+        setIsAnalyzing(false);
+      }
+    },
+    [
+      files.echo,
+      echoModelReady,
+      isAnalyzing,
+      echoRotate,
+      echoFlip,
+      caseId,
+      storageReady,
+      persist,
+      scrollToSection,
+      onReloadHealth,
+    ]
+  );
+
+  /* Re-run the same image at a different rotation. Used by the orientation
+     control in the echo result, since a display-oriented upload is a
+     quarter turn away from the training distribution. */
+  const reanalyzeWithOrientation = useCallback(
+    (rotate, flip) => runAnalysis({ rotate, flip }),
+    [runAnalysis]
+  );
+
+  /* ==========================================================
+     CASE STATE FOR THE LANGUAGE MODEL
+
+     Sent structured; the backend renders it into prompt text,
+     including an explicit list of unavailable modalities so the
+     model cannot invent CCTA or ECG findings.
+     ========================================================== */
+
+  const caseState = useMemo(
+    () => ({
+      case_id: caseId || "",
+      patient: patientData,
+      clinical: clinicalData,
+      echo: echoResult
+        ? {
+            analyzed: true,
+            model: echoResult.model,
+            structures: echoResult.structures,
+            input: echoResult.input,
+            // Both bear on how far the findings can be trusted, so the
+            // backend needs them to caveat the prompt honestly.
+            orientation: echoResult.orientation,
+            quantification: echoResult.quantification,
+          }
+        : { analyzed: false },
+      modalities_provided: {
+        echo: Boolean(files.echo) || Boolean(echoResult),
+        ccta: Boolean(files.ccta),
+        ecg: Boolean(files.ecg),
+      },
+    }),
+    [caseId, patientData, clinicalData, echoResult, files]
+  );
+
+  const askQuestion = async (text) => {
+    const trimmed = (text ?? question).trim();
+
+    if (!trimmed || isAsking) return;
+
+    const withQuestion = [...conversation, { role: "user", text: trimmed }];
+
+    setConversation(withQuestion);
+    setQuestion("");
+    setIsAsking(true);
+    setDirty(true);
+
+    try {
+      const data = await askClinicalQuestion(trimmed, caseState);
+
+      const answer = {
+        role: "assistant",
+        text:
+          data.answer ||
+          "No response was returned by the clinical language model.",
+        model: data.model,
+        device: data.device,
+        contextUsed: data.context_used,
+        contextPreview: data.context_preview,
+      };
+
+      const complete = [...withQuestion, answer];
+      setConversation(complete);
+
+      // Only fold the exchange into an existing record. Asking a general
+      // cardiology question with no patient entered should not silently
+      // create a case.
+      if (caseId && storageReady) {
+        persist({ silent: true, messages: complete });
+      }
+    } catch (error) {
+      setConversation([
+        ...withQuestion,
+        { role: "assistant", text: error.message, error: true },
+      ]);
+    } finally {
+      setIsAsking(false);
+    }
+  };
+
+  const contextItems = [
+    { label: "Patient", active: hasPatientData },
+    { label: "Clinical", active: hasClinicalData },
+    { label: "Echo findings", active: Boolean(echoResult) },
+    { label: "CCTA", active: false, unavailable: true },
+    { label: "ECG", active: false, unavailable: true },
+  ];
+
+  const savedLabel = savedAt ? formatTimestamp(savedAt) : "";
+
+  return (
+    <main className="cv-main">
+      {/* ==================================================
+          HERO
+      ================================================== */}
+
+      <section className="cv-hero">
+        <div className="cv-eyebrow">Cardiovascular AI platform</div>
+
+        <h1>Understand the heart through multimodal AI.</h1>
+
+        <p>
+          Echocardiography segmentation runs locally on a trained UNet++
+          model. CCTA, ECG and clinical risk models are still in development
+          and are clearly marked as unavailable.
+        </p>
+      </section>
+
+      {!backendOnline && (
+        <div className="cv-banner error">
+          <strong>Backend offline</strong>
+
+          <span>{healthError}</span>
+
+          <button className="cv-secondary-button" onClick={onReloadHealth}>
+            Retry
+          </button>
+        </div>
+      )}
+
+      {backendOnline && !echoModelReady && (
+        <div className="cv-banner warning">
+          <strong>Echo model unavailable</strong>
+
+          <span>
+            {health?.modalities?.echo?.note ||
+              health?.models?.echo?.error ||
+              "The segmentation model did not load."}
+          </span>
+
+          <button className="cv-secondary-button" onClick={onReloadHealth}>
+            Recheck
+          </button>
+        </div>
+      )}
+
+      {backendOnline && !storageReady && (
+        <div className="cv-banner warning">
+          <strong>Case storage unavailable</strong>
+
+          <span>
+            {health?.storage?.error ||
+              "The local case database could not be opened, so nothing can " +
+                "be saved. Analysis still works, but this case will be lost " +
+                "when the page reloads."}
+          </span>
+        </div>
+      )}
+
+      {switchError && (
+        <div className="cv-banner error">
+          <strong>Could not open that case</strong>
+
+          <span>{switchError}</span>
+        </div>
+      )}
+
+      {/* ==================================================
+          01. PATIENT CASE
+      ================================================== */}
+
+      <section id="case" className="cv-section">
+        <div className="cv-section-head">
+          <div>
+            <div className="cv-section-index">01 / Patient case</div>
+
+            <h2>Build a clinical case</h2>
 
             <p>
-              Echocardiography segmentation runs locally on a trained
-              UNet++ model. CCTA, ECG and clinical risk models are still
-              in development and are clearly marked as unavailable.
+              Provide the available patient information and imaging studies.
+              Missing modalities can remain unavailable.
             </p>
-          </section>
+          </div>
 
-          {!backendOnline && (
-            <div className="cv-banner error">
-              <strong>Backend offline</strong>
+          <div className={`cv-case-chip ${caseId ? "saved" : ""}`}>
+            <span>{caseId ? "Case ID" : "Status"}</span>
 
-              <span>{healthError}</span>
+            <strong>{caseId || "New case"}</strong>
 
-              <button className="cv-secondary-button" onClick={loadHealth}>
-                Retry
-              </button>
+            {caseId && createdAt && (
+              <em>Opened {formatTimestamp(createdAt)}</em>
+            )}
+          </div>
+        </div>
+
+        {saveError && (
+          <div className="cv-banner error">
+            <strong>Could not save this case</strong>
+
+            <span>{saveError}</span>
+
+            <button
+              className="cv-secondary-button"
+              disabled={isSaving}
+              onClick={() => persist()}
+            >
+              Try again
+            </button>
+          </div>
+        )}
+
+        <div className="cv-case-grid three">
+          <PatientForm
+            data={patientData}
+            onChange={updatePatient}
+            caseId={caseId}
+            isSaved={Boolean(savedAt) && !dirty}
+            savedAt={savedLabel}
+          />
+
+          <ClinicalForm data={clinicalData} onChange={updateClinical} />
+
+          <div className="cv-modality-panel">
+            <div className="cv-panel-header">
+              <span className="cv-card-kicker">Imaging studies</span>
+
+              <h3>Modalities</h3>
+            </div>
+
+            {restoredFilename && !files.echo && (
+              <div className="cv-restored-note">
+                Restored from the saved record: <code>{restoredFilename}</code>.
+                The findings below are the stored ones. Re-select the file to
+                run the model again.
+              </div>
+            )}
+
+            <div className="cv-modality-list">
+              {Object.entries(modalityConfig).map(([key, modality]) => (
+                <ModalityRow
+                  key={key}
+                  modality={modality}
+                  file={files[key]}
+                  inputRef={inputRefs[key]}
+                  isDragOver={dragOver === key}
+                  onDragOver={(over) => setDragOver(over ? key : null)}
+                  onUpload={(file) => handleFile(key, file)}
+                  onRemove={() => removeFile(key)}
+                />
+              ))}
+            </div>
+          </div>
+        </div>
+
+        <div className="cv-analysis-bar">
+          <div>
+            <div className="cv-analysis-title">
+              {files.echo
+                ? "Ready to segment echocardiography"
+                : "An echo image is required to run analysis"}
+            </div>
+
+            <div className="cv-analysis-subtitle">
+              {files.echo
+                ? `${files.echo.name} · ${
+                    hasClinicalData
+                      ? "clinical data will be passed to the case assistant"
+                      : "no clinical data entered"
+                  }`
+                : "Echocardiography is the only trained imaging model. " +
+                  "Clinical data alone can still be discussed in the case assistant."}
+            </div>
+          </div>
+
+          <div className="cv-analysis-actions">
+            <button
+              className="cv-secondary-button"
+              disabled={!canSave || isSaving || !storageReady}
+              onClick={() => persist()}
+            >
+              {isSaving ? "Saving…" : caseId ? "Save changes" : "Save case"}
+            </button>
+
+            <button
+              className={`cv-primary-button ${isAnalyzing ? "loading" : ""}`}
+              disabled={!canAnalyze}
+              onClick={() => runAnalysis()}
+            >
+              {isAnalyzing ? (
+                <>
+                  <span className="cv-button-spinner" />
+                  Segmenting
+                </>
+              ) : (
+                <>
+                  Analyze echo
+                  <span aria-hidden="true">→</span>
+                </>
+              )}
+            </button>
+          </div>
+        </div>
+      </section>
+
+      {/* ==================================================
+          02. RESULTS
+      ================================================== */}
+
+      <section id="results" className="cv-section">
+        <div className="cv-section-head">
+          <div>
+            <div className="cv-section-index">02 / Analysis</div>
+
+            <h2>Case intelligence</h2>
+
+            <p>
+              Model output for every modality that has a trained model behind
+              it.
+            </p>
+          </div>
+
+          <div
+            className={`cv-status-chip ${analysisComplete ? "complete" : ""}`}
+          >
+            <span />
+
+            {analysisComplete ? "Analysis complete" : "Awaiting analysis"}
+          </div>
+        </div>
+
+        {analysisError && (
+          <div className="cv-banner error">
+            <strong>Analysis failed</strong>
+
+            <span>{analysisError}</span>
+          </div>
+        )}
+
+        {!analysisComplete && !isAnalyzing && !analysisError && (
+          <div className="cv-empty-analysis">
+            <div className="cv-empty-icon">◌</div>
+
+            <h3>No analysis generated yet</h3>
+
+            <p>
+              Upload an echocardiography image above, then run the
+              segmentation model.
+            </p>
+
+            <button
+              className="cv-secondary-button"
+              onClick={() => scrollToSection("case")}
+            >
+              Configure patient case
+            </button>
+          </div>
+        )}
+
+        {isAnalyzing && <AnalysisLoader />}
+
+        {analysisComplete && (
+          <div className="cv-results">
+            <div className="cv-tabs" role="tablist">
+              {[
+                ["overview", "Overview", true],
+                ["echo", "Echo", true],
+                ["ccta", "CCTA", false],
+                ["ecg", "ECG", false],
+                ["clinical", "Clinical", false],
+              ].map(([id, label, available]) => (
+                <button
+                  key={id}
+                  role="tab"
+                  aria-selected={activeResult === id}
+                  className={`${activeResult === id ? "active" : ""} ${
+                    available ? "" : "pending"
+                  }`}
+                  onClick={() => setActiveResult(id)}
+                >
+                  {label}
+                  {!available && <i className="cv-tab-dot" />}
+                </button>
+              ))}
+            </div>
+
+            {activeResult === "overview" && (
+              <OverviewResult
+                echoResult={echoResult}
+                files={files}
+                clinicalData={clinicalData}
+                patientData={patientData}
+                hasClinicalData={hasClinicalData}
+                restoredFilename={restoredFilename}
+              />
+            )}
+
+            {activeResult === "echo" &&
+              (echoResult ? (
+                <EchoResult
+                  result={echoResult}
+                  rotate={echoRotate}
+                  flip={echoFlip}
+                  onReorient={
+                    files.echo ? reanalyzeWithOrientation : undefined
+                  }
+                  isAnalyzing={isAnalyzing}
+                />
+              ) : (
+                <div className="cv-empty-analysis">
+                  <p>No echo image was analysed in this case.</p>
+                </div>
+              ))}
+
+            {activeResult === "ccta" && (
+              <PendingModel
+                label="Coronary CT angiography"
+                file={files.ccta}
+                note="There is no trained CCTA model yet, so nothing is inferred from CT data."
+                requirement="notebooks/01_CCTA_Training.ipynb needs to be written and run, and the resulting weights saved to models/ccta/."
+              />
+            )}
+
+            {activeResult === "ecg" && (
+              <PendingModel
+                label="Electrocardiography"
+                file={files.ecg}
+                note="There is no ECG pipeline yet — no training notebook and no model."
+                requirement="An ECG training pipeline and a saved model in models/ecg/."
+              />
+            )}
+
+            {activeResult === "clinical" && (
+              <ClinicalResult clinicalData={clinicalData} />
+            )}
+          </div>
+        )}
+      </section>
+
+      {/* ==================================================
+          03. EXPLAINABILITY
+      ================================================== */}
+
+      {analysisComplete && echoResult && (
+        <section id="explainability" className="cv-section">
+          <div className="cv-section-head">
+            <div>
+              <div className="cv-section-index">03 / Explainability</div>
+
+              <h2>See what the model responded to</h2>
+
+              <p>
+                {echoResult.explainability?.available
+                  ? echoResult.explainability?.description
+                  : "No attribution map was produced for this run, so " +
+                    "there is nothing to show here."}
+              </p>
+            </div>
+          </div>
+
+          {echoResult.explainability?.available ? (
+            <>
+              <div className="cv-xai-grid">
+                <div className="cv-xai-image">
+                  <div className="cv-echo-image-frame">
+                    <img
+                      src={echoResult.images?.saliency_overlay}
+                      alt="Gradient saliency overlay"
+                    />
+                  </div>
+
+                  <div className="cv-image-caption">
+                    <strong>{echoResult.explainability?.method}</strong>
+
+                    <span>
+                      Target: {echoResult.explainability?.target_class}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="cv-xai-image">
+                  <div className="cv-echo-image-frame">
+                    <img
+                      src={echoResult.images?.combined}
+                      alt="Segmentation and saliency combined"
+                    />
+                  </div>
+
+                  <div className="cv-image-caption">
+                    <strong>Segmentation + saliency</strong>
+
+                    <span>
+                      Predicted structures with attribution overlaid
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="cv-xai-note">
+                Saliency shows which input pixels the
+                left-ventricular-cavity probability was most sensitive to. It
+                is a property of the model, not independent clinical
+                evidence, and a bright region is not a finding.
+              </div>
+            </>
+          ) : (
+            /* An all-zero gradient renders as a smooth, plausible-looking
+               heatmap. Showing it would be worse than showing nothing:
+               it is an explanation of a computation that never happened. */
+            <div className="cv-xai-unavailable">
+              <strong>Attribution unavailable for this run</strong>
+
+              <p>
+                The gradient with respect to the input could not be computed,
+                so no saliency map exists. The segmentation above is
+                unaffected and remains valid — only the explanation is
+                missing.
+              </p>
+
+              {echoResult.notes?.length > 0 && (
+                <ul>
+                  {echoResult.notes.map((note, index) => (
+                    <li key={index}>{note}</li>
+                  ))}
+                </ul>
+              )}
             </div>
           )}
+        </section>
+      )}
 
-          {backendOnline && !echoModelReady && (
-            <div className="cv-banner warning">
-              <strong>Echo model unavailable</strong>
+      {/* ==================================================
+          04. CASE ASSISTANT
+      ================================================== */}
 
-              <span>
-                {health?.modalities?.echo?.note ||
-                  health?.models?.echo?.error ||
-                  "The segmentation model did not load."}
+      <section id="assistant" className="cv-section cv-assistant-section">
+        <div className="cv-section-head">
+          <div>
+            <div className="cv-section-index">04 / Case assistant</div>
+
+            <h2>Ask about this case</h2>
+
+            <p>
+              Query the local medical language model. When a case has clinical
+              data or echo findings, they are sent as context and the model is
+              told which modalities are unavailable.
+            </p>
+          </div>
+
+          <div className={`cv-local-badge ${medgemmaReady ? "" : "offline"}`}>
+            <span />
+            {medgemmaReady
+              ? "Local medical model"
+              : "Language model unavailable"}
+          </div>
+        </div>
+
+        <div className="cv-assistant">
+          {/* ============================================
+              CASE CONTEXT
+          ============================================ */}
+
+          <div className="cv-assistant-context">
+            <div className="cv-assistant-context-header">
+              <span className="cv-card-kicker">Case context</span>
+
+              <span className="cv-context-status">
+                {hasClinicalData || hasPatientData || echoResult
+                  ? "Loaded"
+                  : "Empty"}
               </span>
-
-              <button className="cv-secondary-button" onClick={loadHealth}>
-                Recheck
-              </button>
             </div>
-          )}
 
-          {/* ==================================================
-              01. PATIENT CASE
-          ================================================== */}
+            <div className="cv-context-items">
+              {contextItems.map((item) => (
+                <ContextItem
+                  key={item.label}
+                  label={item.label}
+                  active={item.active}
+                  unavailable={item.unavailable}
+                />
+              ))}
+            </div>
 
-          <section id="case" className="cv-section">
-            <div className="cv-section-head">
-              <div>
-                <div className="cv-section-index">01 / Patient case</div>
+            <div className="cv-context-hint">
+              Unavailable modalities are named explicitly in the prompt so the
+              model cannot invent findings for them. The patient's name and
+              MRN are never sent.
+            </div>
+          </div>
 
-                <h2>Build a clinical case</h2>
+          {/* ============================================
+              CHAT
+          ============================================ */}
+
+          <div className="cv-chat">
+            {conversation.length === 0 ? (
+              <div className="cv-chat-empty">
+                <div className="cv-chat-icon">+</div>
+
+                <h3>Ask a clinical question</h3>
 
                 <p>
-                  Provide the available patient information and imaging
-                  studies. Missing modalities can remain unavailable.
+                  Ask about general cardiology, or about the findings in this
+                  case.
                 </p>
-              </div>
 
-              <div className="cv-case-chip">
-                <span>Case ID</span>
-                <strong>{patientId}</strong>
-              </div>
-            </div>
+                <div className="cv-question-suggestions">
+                  <button
+                    onClick={() =>
+                      askQuestion(
+                        "What are the major risk factors for coronary artery disease?"
+                      )
+                    }
+                    disabled={isAsking || !medgemmaReady}
+                  >
+                    CAD risk factors
+                  </button>
 
-            <div className="cv-case-grid">
-              <ClinicalForm data={clinicalData} onChange={updateClinical} />
+                  <button
+                    onClick={() =>
+                      askQuestion(
+                        "What do the segmented cardiac structures in this case show?"
+                      )
+                    }
+                    disabled={isAsking || !medgemmaReady || !echoResult}
+                  >
+                    Explain these findings
+                  </button>
 
-              <div className="cv-modality-panel">
-                <div className="cv-panel-header">
-                  <span className="cv-card-kicker">Imaging studies</span>
-
-                  <h3>Modalities</h3>
-                </div>
-
-                <div className="cv-modality-list">
-                  {Object.entries(modalityConfig).map(([key, modality]) => (
-                    <ModalityRow
-                      key={key}
-                      modality={modality}
-                      file={files[key]}
-                      inputRef={inputRefs[key]}
-                      isDragOver={dragOver === key}
-                      onDragOver={(over) => setDragOver(over ? key : null)}
-                      onUpload={(file) => handleFile(key, file)}
-                      onRemove={() => removeFile(key)}
-                    />
-                  ))}
-                </div>
-              </div>
-            </div>
-
-            <div className="cv-analysis-bar">
-              <div>
-                <div className="cv-analysis-title">
-                  {files.echo
-                    ? "Ready to segment echocardiography"
-                    : "An echo image is required to run analysis"}
-                </div>
-
-                <div className="cv-analysis-subtitle">
-                  {files.echo
-                    ? `${files.echo.name} · ${
-                        hasClinicalData
-                          ? "clinical data will be passed to the case assistant"
-                          : "no clinical data entered"
-                      }`
-                    : "Echocardiography is the only trained imaging model. " +
-                      "Clinical data alone can still be discussed in the case assistant."}
+                  <button
+                    onClick={() =>
+                      askQuestion(
+                        "Based on the available data, what further information would be needed?"
+                      )
+                    }
+                    disabled={isAsking || !medgemmaReady}
+                  >
+                    What is missing?
+                  </button>
                 </div>
               </div>
+            ) : (
+              <div className="cv-conversation">
+                {conversation.map((message, index) => (
+                  <ChatMessage key={index} message={message} />
+                ))}
+
+                {isAsking && (
+                  <div className="cv-message assistant">
+                    <div className="cv-message-role">CardioVision</div>
+
+                    <div className="cv-message-text cv-thinking">
+                      <span />
+                      <span />
+                      <span />
+                      <em>MedGemma is generating...</em>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* ==========================================
+                INPUT
+            ========================================== */}
+
+            <div className="cv-chat-input">
+              <textarea
+                rows="1"
+                placeholder={
+                  !medgemmaReady
+                    ? "The language model is not loaded."
+                    : isAsking
+                    ? "MedGemma is generating a response..."
+                    : "Ask a clinical question..."
+                }
+                value={question}
+                disabled={isAsking || !medgemmaReady}
+                onChange={(event) => setQuestion(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && !event.shiftKey) {
+                    event.preventDefault();
+
+                    if (!isAsking) {
+                      askQuestion();
+                    }
+                  }
+                }}
+              />
 
               <button
-                className={`cv-primary-button ${isAnalyzing ? "loading" : ""}`}
-                disabled={!canAnalyze}
-                onClick={() => runAnalysis()}
+                onClick={() => askQuestion()}
+                disabled={!question.trim() || isAsking || !medgemmaReady}
               >
-                {isAnalyzing ? (
+                {isAsking ? (
                   <>
                     <span className="cv-button-spinner" />
-                    Segmenting
+                    Asking
                   </>
                 ) : (
                   <>
-                    Analyze echo
+                    Ask
                     <span aria-hidden="true">→</span>
                   </>
                 )}
               </button>
             </div>
-          </section>
+          </div>
+        </div>
+      </section>
 
-          {/* ==================================================
-              02. RESULTS
-          ================================================== */}
+      {/* ==================================================
+          FOOTER
+      ================================================== */}
 
-          <section id="results" className="cv-section">
-            <div className="cv-section-head">
-              <div>
-                <div className="cv-section-index">02 / Analysis</div>
+      <footer className="cv-footer">
+        <div>
+          <strong>CardioVision AI</strong>
 
-                <h2>Case intelligence</h2>
+          <span>Multimodal cardiovascular imaging research platform</span>
+        </div>
 
-                <p>
-                  Model output for every modality that has a trained model
-                  behind it.
-                </p>
-              </div>
+        <div>
+          <button className="cv-link-button" onClick={onNewCase}>
+            Start a new case
+          </button>
 
-              <div
-                className={`cv-status-chip ${
-                  analysisComplete ? "complete" : ""
-                }`}
-              >
-                <span />
-
-                {analysisComplete ? "Analysis complete" : "Awaiting analysis"}
-              </div>
-            </div>
-
-            {analysisError && (
-              <div className="cv-banner error">
-                <strong>Analysis failed</strong>
-
-                <span>{analysisError}</span>
-              </div>
-            )}
-
-            {!analysisComplete && !isAnalyzing && !analysisError && (
-              <div className="cv-empty-analysis">
-                <div className="cv-empty-icon">◌</div>
-
-                <h3>No analysis generated yet</h3>
-
-                <p>
-                  Upload an echocardiography image above, then run the
-                  segmentation model.
-                </p>
-
-                <button
-                  className="cv-secondary-button"
-                  onClick={() => scrollToSection("case")}
-                >
-                  Configure patient case
-                </button>
-              </div>
-            )}
-
-            {isAnalyzing && <AnalysisLoader />}
-
-            {analysisComplete && (
-              <div className="cv-results">
-                <div className="cv-tabs" role="tablist">
-                  {[
-                    ["overview", "Overview", true],
-                    ["echo", "Echo", true],
-                    ["ccta", "CCTA", false],
-                    ["ecg", "ECG", false],
-                    ["clinical", "Clinical", false],
-                  ].map(([id, label, available]) => (
-                    <button
-                      key={id}
-                      role="tab"
-                      aria-selected={activeResult === id}
-                      className={`${activeResult === id ? "active" : ""} ${
-                        available ? "" : "pending"
-                      }`}
-                      onClick={() => setActiveResult(id)}
-                    >
-                      {label}
-                      {!available && <i className="cv-tab-dot" />}
-                    </button>
-                  ))}
-                </div>
-
-                {activeResult === "overview" && (
-                  <OverviewResult
-                    echoResult={echoResult}
-                    files={files}
-                    clinicalData={clinicalData}
-                    hasClinicalData={hasClinicalData}
-                  />
-                )}
-
-                {activeResult === "echo" &&
-                  (echoResult ? (
-                    <EchoResult
-                      result={echoResult}
-                      rotate={echoRotate}
-                      flip={echoFlip}
-                      onReorient={reanalyzeWithOrientation}
-                      isAnalyzing={isAnalyzing}
-                    />
-                  ) : (
-                    <div className="cv-empty-analysis">
-                      <p>No echo image was analysed in this case.</p>
-                    </div>
-                  ))}
-
-                {activeResult === "ccta" && (
-                  <PendingModel
-                    label="Coronary CT angiography"
-                    file={files.ccta}
-                    note="There is no trained CCTA model yet, so nothing is inferred from CT data."
-                    requirement="notebooks/01_CCTA_Training.ipynb needs to be written and run, and the resulting weights saved to models/ccta/."
-                  />
-                )}
-
-                {activeResult === "ecg" && (
-                  <PendingModel
-                    label="Electrocardiography"
-                    file={files.ecg}
-                    note="There is no ECG pipeline yet — no training notebook and no model."
-                    requirement="An ECG training pipeline and a saved model in models/ecg/."
-                  />
-                )}
-
-                {activeResult === "clinical" && (
-                  <ClinicalResult clinicalData={clinicalData} />
-                )}
-              </div>
-            )}
-          </section>
-
-          {/* ==================================================
-              03. EXPLAINABILITY
-          ================================================== */}
-
-          {analysisComplete && echoResult && (
-            <section id="explainability" className="cv-section">
-              <div className="cv-section-head">
-                <div>
-                  <div className="cv-section-index">03 / Explainability</div>
-
-                  <h2>See what the model responded to</h2>
-
-                  <p>
-                    {echoResult.explainability?.available
-                      ? echoResult.explainability?.description
-                      : "No attribution map was produced for this run, so " +
-                        "there is nothing to show here."}
-                  </p>
-                </div>
-              </div>
-
-              {echoResult.explainability?.available ? (
-                <>
-                  <div className="cv-xai-grid">
-                    <div className="cv-xai-image">
-                      <div className="cv-echo-image-frame">
-                        <img
-                          src={echoResult.images?.saliency_overlay}
-                          alt="Gradient saliency overlay"
-                        />
-                      </div>
-
-                      <div className="cv-image-caption">
-                        <strong>{echoResult.explainability?.method}</strong>
-
-                        <span>
-                          Target: {echoResult.explainability?.target_class}
-                        </span>
-                      </div>
-                    </div>
-
-                    <div className="cv-xai-image">
-                      <div className="cv-echo-image-frame">
-                        <img
-                          src={echoResult.images?.combined}
-                          alt="Segmentation and saliency combined"
-                        />
-                      </div>
-
-                      <div className="cv-image-caption">
-                        <strong>Segmentation + saliency</strong>
-
-                        <span>
-                          Predicted structures with attribution overlaid
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="cv-xai-note">
-                    Saliency shows which input pixels the
-                    left-ventricular-cavity probability was most sensitive
-                    to. It is a property of the model, not independent
-                    clinical evidence, and a bright region is not a finding.
-                  </div>
-                </>
-              ) : (
-                /* An all-zero gradient renders as a smooth, plausible-looking
-                   heatmap. Showing it would be worse than showing nothing:
-                   it is an explanation of a computation that never happened. */
-                <div className="cv-xai-unavailable">
-                  <strong>Attribution unavailable for this run</strong>
-
-                  <p>
-                    The gradient with respect to the input could not be
-                    computed, so no saliency map exists. The segmentation
-                    above is unaffected and remains valid — only the
-                    explanation is missing.
-                  </p>
-
-                  {echoResult.notes?.length > 0 && (
-                    <ul>
-                      {echoResult.notes.map((note, index) => (
-                        <li key={index}>{note}</li>
-                      ))}
-                    </ul>
-                  )}
-                </div>
-              )}
-            </section>
-          )}
-
-          {/* ==================================================
-              04. CASE ASSISTANT
-          ================================================== */}
-
-          <section id="assistant" className="cv-section cv-assistant-section">
-            <div className="cv-section-head">
-              <div>
-                <div className="cv-section-index">04 / Case assistant</div>
-
-                <h2>Ask about this case</h2>
-
-                <p>
-                  Query the local medical language model. When a case has
-                  clinical data or echo findings, they are sent as context
-                  and the model is told which modalities are unavailable.
-                </p>
-              </div>
-
-              <div
-                className={`cv-local-badge ${medgemmaReady ? "" : "offline"}`}
-              >
-                <span />
-                {medgemmaReady
-                  ? "Local medical model"
-                  : "Language model unavailable"}
-              </div>
-            </div>
-
-            <div className="cv-assistant">
-              {/* ============================================
-                  CASE CONTEXT
-              ============================================ */}
-
-              <div className="cv-assistant-context">
-                <div className="cv-assistant-context-header">
-                  <span className="cv-card-kicker">Case context</span>
-
-                  <span className="cv-context-status">
-                    {hasClinicalData || echoResult ? "Loaded" : "Empty"}
-                  </span>
-                </div>
-
-                <div className="cv-context-items">
-                  {contextItems.map((item) => (
-                    <ContextItem
-                      key={item.label}
-                      label={item.label}
-                      active={item.active}
-                      unavailable={item.unavailable}
-                    />
-                  ))}
-                </div>
-
-                <div className="cv-context-hint">
-                  Unavailable modalities are named explicitly in the prompt so
-                  the model cannot invent findings for them.
-                </div>
-              </div>
-
-              {/* ============================================
-                  CHAT
-              ============================================ */}
-
-              <div className="cv-chat">
-                {conversation.length === 0 ? (
-                  <div className="cv-chat-empty">
-                    <div className="cv-chat-icon">+</div>
-
-                    <h3>Ask a clinical question</h3>
-
-                    <p>
-                      Ask about general cardiology, or about the findings in
-                      this case.
-                    </p>
-
-                    <div className="cv-question-suggestions">
-                      <button
-                        onClick={() =>
-                          askQuestion(
-                            "What are the major risk factors for coronary artery disease?"
-                          )
-                        }
-                        disabled={isAsking || !medgemmaReady}
-                      >
-                        CAD risk factors
-                      </button>
-
-                      <button
-                        onClick={() =>
-                          askQuestion(
-                            "What do the segmented cardiac structures in this case show?"
-                          )
-                        }
-                        disabled={isAsking || !medgemmaReady || !echoResult}
-                      >
-                        Explain these findings
-                      </button>
-
-                      <button
-                        onClick={() =>
-                          askQuestion(
-                            "Based on the available data, what further information would be needed?"
-                          )
-                        }
-                        disabled={isAsking || !medgemmaReady}
-                      >
-                        What is missing?
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="cv-conversation">
-                    {conversation.map((message, index) => (
-                      <ChatMessage key={index} message={message} />
-                    ))}
-
-                    {isAsking && (
-                      <div className="cv-message assistant">
-                        <div className="cv-message-role">CardioVision</div>
-
-                        <div className="cv-message-text cv-thinking">
-                          <span />
-                          <span />
-                          <span />
-                          <em>MedGemma is generating...</em>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {/* ==========================================
-                    INPUT
-                ========================================== */}
-
-                <div className="cv-chat-input">
-                  <textarea
-                    rows="1"
-                    placeholder={
-                      !medgemmaReady
-                        ? "The language model is not loaded."
-                        : isAsking
-                        ? "MedGemma is generating a response..."
-                        : "Ask a clinical question..."
-                    }
-                    value={question}
-                    disabled={isAsking || !medgemmaReady}
-                    onChange={(event) => setQuestion(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter" && !event.shiftKey) {
-                        event.preventDefault();
-
-                        if (!isAsking) {
-                          askQuestion();
-                        }
-                      }
-                    }}
-                  />
-
-                  <button
-                    onClick={() => askQuestion()}
-                    disabled={!question.trim() || isAsking || !medgemmaReady}
-                  >
-                    {isAsking ? (
-                      <>
-                        <span className="cv-button-spinner" />
-                        Asking
-                      </>
-                    ) : (
-                      <>
-                        Ask
-                        <span aria-hidden="true">→</span>
-                      </>
-                    )}
-                  </button>
-                </div>
-              </div>
-            </div>
-          </section>
-
-          {/* ==================================================
-              FOOTER
-          ================================================== */}
-
-          <footer className="cv-footer">
-            <div>
-              <strong>CardioVision AI</strong>
-
-              <span>
-                Multimodal cardiovascular imaging research platform
-              </span>
-            </div>
-
-            <div>Research prototype · Local inference</div>
-          </footer>
-        </main>
-      </div>
-    </div>
+          <span>Research prototype · Local inference</span>
+        </div>
+      </footer>
+    </main>
   );
+}
+
+/* ============================================================
+   TIMESTAMPS
+   ============================================================ */
+
+function formatTimestamp(iso) {
+  if (!iso) return "";
+
+  const when = new Date(iso);
+
+  if (Number.isNaN(when.getTime())) return "";
+
+  return when.toLocaleString(undefined, {
+    day: "numeric",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
 
 /* ============================================================
@@ -988,7 +1672,7 @@ function ClinicalForm({ data, onChange }) {
       <div className="cv-panel-header">
         <span className="cv-card-kicker">Clinical data</span>
 
-        <h3>Patient information</h3>
+        <h3>Presentation</h3>
       </div>
 
       <div className="cv-form">
@@ -1185,8 +1869,8 @@ function AnalysisLoader() {
         <h3>Running echo segmentation</h3>
 
         <p>
-          Preprocessing the frame and running the UNet++ model, then
-          computing gradient saliency. First run also loads the weights.
+          Preprocessing the frame and running the UNet++ model, then computing
+          gradient saliency. First run also loads the weights.
         </p>
       </div>
 
@@ -1218,7 +1902,14 @@ function LoaderStep({ number, text, active }) {
    produces one.
    ============================================================ */
 
-function OverviewResult({ echoResult, files, clinicalData, hasClinicalData }) {
+function OverviewResult({
+  echoResult,
+  files,
+  clinicalData,
+  patientData,
+  hasClinicalData,
+  restoredFilename,
+}) {
   const structures = echoResult?.structures || [];
   const present = structures.filter((structure) => structure.present);
   const calibrated = Boolean(echoResult?.input?.has_spatial_calibration);
@@ -1228,6 +1919,9 @@ function OverviewResult({ echoResult, files, clinicalData, hasClinicalData }) {
   const foregroundCount = echoResult?.model?.num_classes
     ? echoResult.model.num_classes - 1
     : structures.length;
+
+  const echoName =
+    files.echo?.name || echoResult?.input?.filename || restoredFilename;
 
   return (
     <div className="cv-overview">
@@ -1307,13 +2001,21 @@ function OverviewResult({ echoResult, files, clinicalData, hasClinicalData }) {
 
           <ul className="cv-input-list">
             <li>
+              Patient:{" "}
+              {patientData?.name?.trim()
+                ? patientData.name.trim()
+                : "no name recorded"}
+              {patientData?.mrn?.trim() ? ` · ${patientData.mrn.trim()}` : ""}
+            </li>
+
+            <li>
               Clinical data:{" "}
               {hasClinicalData
                 ? `entered${clinicalData.age ? `, age ${clinicalData.age}` : ""}`
                 : "none entered"}
             </li>
 
-            <li>Echo image: {files.echo ? files.echo.name : "none"}</li>
+            <li>Echo image: {echoName || "none"}</li>
 
             <li>
               CCTA: {files.ccta ? `${files.ccta.name} (not analysed)` : "none"}
