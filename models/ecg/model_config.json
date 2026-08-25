@@ -1,0 +1,27 @@
+{
+    "architecture": "ECGResNet1D",
+    "input_shape": [
+        12,
+        1000
+    ],
+    "output_classes": [
+        "NORM",
+        "MI",
+        "STTC",
+        "CD",
+        "HYP"
+    ],
+    "parameters": 3884165,
+    "trainable_parameters": 3884165,
+    "dropout": 0.3,
+    "optimizer": "AdamW",
+    "learning_rate": 0.001,
+    "weight_decay": 0.0001,
+    "loss": "BCEWithLogitsLoss",
+    "class_balancing": "pos_weight",
+    "scheduler": "ReduceLROnPlateau",
+    "early_stopping": true,
+    "early_stopping_patience": 8,
+    "gradient_clipping": 1.0,
+    "mixed_precision": true
+}

@@ -1,0 +1,29 @@
+{
+    "original_sampling_frequency": 500,
+    "target_sampling_frequency": 100,
+    "duration_seconds": 10,
+    "target_length": 1000,
+    "n_leads": 12,
+    "lead_names": [
+        "I",
+        "II",
+        "III",
+        "aVR",
+        "aVL",
+        "aVF",
+        "V1",
+        "V2",
+        "V3",
+        "V4",
+        "V5",
+        "V6"
+    ],
+    "bandpass_low_hz": 0.5,
+    "bandpass_high_hz": 40.0,
+    "normalization": "per-lead robust median/IQR",
+    "clip_range": [
+        -10.0,
+        10.0
+    ],
+    "seed": 42
+}
