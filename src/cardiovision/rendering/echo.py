@@ -4,60 +4,25 @@ CardioVision AI — server-side rendering of segmentation results.
 Turns mask / saliency / input arrays into base64-encoded PNG data URLs so
 the frontend can display them with a plain <img> tag.
 
-Deliberately implements the "jet" colormap in numpy rather than importing
-matplotlib, keeping matplotlib a notebook-only dependency.
+The colour ramp and PNG encoder live in ``rendering.primitives``, shared with
+the ECG renderer. They are re-exported here because this module was their
+original home and callers still import them from it.
 """
 
 from __future__ import annotations
 
-import base64
-from io import BytesIO
-
 import numpy as np
 
-from config import ECHO_CLASS_COLORS, ECHO_NUM_CLASSES
+from cardiovision.config import ECHO_CLASS_COLORS, ECHO_NUM_CLASSES
+from cardiovision.rendering.primitives import apply_jet, to_png_data_url
 
-
-# ============================================================
-# JET COLORMAP
-# ============================================================
-#
-# Anchor points of the classic MATLAB/matplotlib "jet" colormap, chosen so
-# the saliency overlays look the same as the notebook's plt.imshow(cmap="jet").
-
-_JET_ANCHORS = (
-    (0.000, (0, 0, 131)),
-    (0.125, (0, 0, 255)),
-    (0.375, (0, 255, 255)),
-    (0.625, (255, 255, 0)),
-    (0.875, (255, 0, 0)),
-    (1.000, (128, 0, 0)),
-)
-
-
-def _build_jet_lut() -> np.ndarray:
-    """256×3 uint8 lookup table."""
-    positions = np.array([anchor[0] for anchor in _JET_ANCHORS])
-    colors = np.array([anchor[1] for anchor in _JET_ANCHORS], dtype=np.float64)
-
-    ramp = np.linspace(0.0, 1.0, 256)
-
-    lut = np.stack(
-        [np.interp(ramp, positions, colors[:, channel]) for channel in range(3)],
-        axis=1,
-    )
-
-    return np.clip(lut, 0, 255).astype(np.uint8)
-
-
-_JET_LUT = _build_jet_lut()
-
-
-def apply_jet(values: np.ndarray) -> np.ndarray:
-    """Map a float array in [0, 1] to an (H, W, 3) uint8 RGB image."""
-    clipped = np.clip(np.nan_to_num(values, nan=0.0), 0.0, 1.0)
-    indices = (clipped * 255.0).round().astype(np.uint8)
-    return _JET_LUT[indices]
+__all__ = [
+    "apply_jet",
+    "to_png_data_url",
+    "colorize_mask",
+    "render_analysis_images",
+    "encode_mask_payload",
+]
 
 
 # ============================================================
@@ -112,40 +77,6 @@ def _blend(
         blended = result
 
     return np.clip(blended, 0, 255).astype(np.uint8)
-
-
-def to_png_data_url(rgb: np.ndarray, scale: int = 2) -> str:
-    """
-    Encode an RGB array as a base64 PNG data URL.
-
-    `scale` applies nearest-neighbour upscaling so 256×256 output still
-    looks crisp in the UI without the browser blurring class boundaries.
-    """
-    try:
-        from PIL import Image
-    except ImportError as error:                       # pragma: no cover
-        raise RuntimeError(
-            "Pillow is required to render PNG output. "
-            "Install it with: pip install Pillow"
-        ) from error
-
-    array = rgb
-    if array.ndim == 2:
-        array = _gray_to_rgb(array)
-
-    image = Image.fromarray(array.astype(np.uint8), mode="RGB")
-
-    if scale > 1:
-        image = image.resize(
-            (image.width * scale, image.height * scale),
-            resample=Image.NEAREST,
-        )
-
-    buffer = BytesIO()
-    image.save(buffer, format="PNG", optimize=True)
-
-    encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
-    return f"data:image/png;base64,{encoded}"
 
 
 # ============================================================

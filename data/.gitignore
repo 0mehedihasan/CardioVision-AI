@@ -1,0 +1,6 @@
+# Patient data. Never commit this, and do not sync it to
+# cloud storage — the database is not encrypted.
+cardiovision.db
+cardiovision.db-wal
+cardiovision.db-shm
+cases/

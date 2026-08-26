@@ -1,0 +1,16 @@
+blank_issues_enabled: false
+
+contact_links:
+  - name: Clinical use
+    url: https://github.com/mehedi/CardioVision-AI/blob/main/LICENSE
+    about: >
+      This is a research project with no regulatory clearance and no clinical
+      validation. It is not for use in patient care. Please read the notice at
+      the bottom of the licence.
+
+  - name: Security reports
+    url: https://github.com/mehedi/CardioVision-AI/blob/main/CONTRIBUTING.md#security
+    about: >
+      Report privately rather than in a public issue. Note that one shared
+      password, no TLS and localhost binding are documented limitations rather
+      than vulnerabilities.

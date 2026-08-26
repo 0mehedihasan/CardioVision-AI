@@ -28,7 +28,7 @@ from typing import Any, Optional
 import numpy as np
 import torch
 
-from config import (
+from cardiovision.config import (
     DEVICE,
     ECHO_ARCHITECTURE,
     ECHO_CHECKPOINT_PATH,
@@ -42,7 +42,7 @@ from config import (
     ECHO_SALIENCY_CLASS,
     ECHO_TEST_METRICS,
 )
-from image_io import preprocess_to_tensor
+from cardiovision.preprocessing.image_io import preprocess_to_tensor
 
 
 class EchoModelUnavailable(RuntimeError):

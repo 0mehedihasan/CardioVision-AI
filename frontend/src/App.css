@@ -4089,6 +4089,621 @@
 }
 
 /* ==================================================
+   ECG RESULT
+
+   A single column rather than the echo's two, because the strip
+   is inherently wide: twelve leads over ten seconds does not
+   survive being squeezed into half the width, and a reader
+   scanning for a 40 ms deflection needs every pixel of it.
+   ================================================== */
+
+.cv-ecg-result {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-5);
+}
+
+/* --------------------------------------------------
+   HEADLINE
+-------------------------------------------------- */
+
+.cv-ecg-headline {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--sp-5);
+  align-items: start;
+
+  padding: var(--sp-5);
+
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background: var(--paper);
+  box-shadow: var(--shadow-sm);
+}
+
+.cv-ecg-headline h3 {
+  margin-top: var(--sp-2);
+
+  color: var(--ink);
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.cv-ecg-headline p {
+  margin-top: var(--sp-2);
+  max-width: 64ch;
+
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.7;
+}
+
+.cv-ecg-headline p strong {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.cv-ecg-calls {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  align-items: flex-end;
+}
+
+.cv-ecg-call {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  align-items: flex-end;
+
+  padding: var(--sp-2) var(--sp-3);
+
+  border: 1px solid var(--accent-line);
+  border-radius: var(--r-sm);
+  background: var(--accent-tint);
+
+  color: var(--accent-strong);
+  font-size: 11.5px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.cv-ecg-call em {
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-style: normal;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+}
+
+/* A weak class is tinted as a warning even though it was called, because
+   the call itself is the thing being qualified. */
+.cv-ecg-call.weak {
+  border-color: #ecd4ac;
+  background: var(--warning-tint);
+  color: var(--warning);
+}
+
+.cv-ecg-call.weak em {
+  color: var(--warning);
+}
+
+/* NORM is not "good news" — it is one class of five, and it can fire next
+   to an abnormal one. Neutral, so it never reads as an all-clear. */
+.cv-ecg-call.norm {
+  border-color: var(--line-strong);
+  background: var(--surface-raised);
+  color: var(--ink);
+}
+
+.cv-ecg-call.norm em {
+  color: var(--muted);
+}
+
+.cv-ecg-call.none {
+  border-style: dashed;
+  border-color: var(--line-strong);
+  background: var(--surface);
+
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+/* --------------------------------------------------
+   CONTRADICTION / WARNING BANNERS
+
+   Both are load-bearing rather than decorative: one reports a
+   state the model cannot resolve, the other reports that a call
+   just made is the one least worth trusting. They are styled
+   loudly on purpose.
+-------------------------------------------------- */
+
+.cv-ecg-contradiction,
+.cv-ecg-warning {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+
+  padding: var(--sp-3) var(--sp-4);
+
+  border-radius: var(--r-md);
+  border-left: 3px solid var(--warning);
+  background: var(--warning-tint);
+}
+
+.cv-ecg-contradiction {
+  border-left-color: var(--danger);
+  background: var(--danger-tint);
+}
+
+.cv-ecg-contradiction strong,
+.cv-ecg-warning strong {
+  color: var(--ink);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.cv-ecg-contradiction span,
+.cv-ecg-warning span {
+  max-width: 78ch;
+
+  color: var(--text);
+  font-size: 10.5px;
+  line-height: 1.7;
+}
+
+.cv-ecg-warning code {
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+/* --------------------------------------------------
+   STRIP
+-------------------------------------------------- */
+
+.cv-ecg-strip {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.cv-ecg-strip-frame {
+  padding: var(--sp-3);
+  overflow-x: auto;
+
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background: var(--paper);
+  box-shadow: var(--shadow-sm);
+}
+
+/* The SVG carries its own aspect ratio; a min-width keeps the paper
+   gridding legible on a narrow window by scrolling instead of shrinking. */
+.cv-ecg-strip-frame img {
+  display: block;
+  width: 100%;
+  min-width: 680px;
+  height: auto;
+}
+
+.cv-ecg-chart-frame {
+  margin-top: var(--sp-3);
+  padding: var(--sp-3);
+
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--paper);
+}
+
+.cv-ecg-chart-frame img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+/* --------------------------------------------------
+   BLOCKS
+-------------------------------------------------- */
+
+.cv-ecg-block {
+  padding: var(--sp-5);
+
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background: var(--paper);
+  box-shadow: var(--shadow-sm);
+}
+
+.cv-ecg-block-intro {
+  margin-top: var(--sp-3);
+  max-width: 76ch;
+
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.7;
+}
+
+.cv-ecg-block-intro strong {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.cv-ecg-note {
+  margin-top: var(--sp-3);
+  padding: var(--sp-3) var(--sp-4);
+
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface);
+
+  color: var(--muted);
+  font-size: 10.5px;
+  line-height: 1.7;
+}
+
+.cv-ecg-note strong {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.cv-ecg-note.warn {
+  border-color: #ecd4ac;
+  background: var(--warning-tint);
+  color: var(--text);
+}
+
+/* --------------------------------------------------
+   PREDICTION ROWS
+-------------------------------------------------- */
+
+.cv-ecg-predictions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  margin-top: var(--sp-3);
+}
+
+.cv-ecg-prediction {
+  padding: var(--sp-3) var(--sp-4);
+
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface);
+}
+
+/* Only the called classes are lifted out of the background. The rest stay
+   fully legible — a 0.46 is information — but the eye lands on the calls. */
+.cv-ecg-prediction.positive {
+  border-color: var(--accent-line);
+  background: var(--accent-tint);
+}
+
+.cv-ecg-prediction.positive.weak {
+  border-color: #ecd4ac;
+  background: var(--warning-tint);
+}
+
+.cv-ecg-prediction-head {
+  display: flex;
+  gap: var(--sp-3);
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.cv-ecg-prediction-name {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: baseline;
+  flex-wrap: wrap;
+}
+
+.cv-ecg-prediction-name strong {
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.cv-ecg-prediction-name code {
+  color: var(--soft);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.03em;
+}
+
+.cv-ecg-prediction-value {
+  display: flex;
+  gap: var(--sp-1);
+  align-items: baseline;
+  flex-direction: column;
+  text-align: right;
+}
+
+.cv-ecg-prediction-value strong {
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 15px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.cv-ecg-prediction-value span {
+  color: var(--soft);
+  font-size: 9.5px;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.cv-ecg-prediction-value span.called {
+  color: var(--accent-strong);
+  font-weight: 600;
+}
+
+.cv-ecg-prediction.weak .cv-ecg-prediction-value span.called {
+  color: var(--warning);
+}
+
+/* The bar and its threshold marker. `b` is the marker; it sits on the same
+   axis as the fill so a near-miss is visibly a near-miss rather than a
+   number the reader has to compare against a threshold quoted elsewhere. */
+.cv-ecg-prediction-bar {
+  position: relative;
+
+  height: 7px;
+  margin-top: var(--sp-3);
+
+  border-radius: 4px;
+  background: var(--surface-raised);
+}
+
+.cv-ecg-prediction.positive .cv-ecg-prediction-bar {
+  background: rgba(16, 23, 29, 0.08);
+}
+
+.cv-ecg-prediction-bar i {
+  display: block;
+  height: 100%;
+
+  border-radius: 4px;
+  background: var(--soft);
+}
+
+.cv-ecg-prediction.positive .cv-ecg-prediction-bar i {
+  background: var(--accent);
+}
+
+.cv-ecg-prediction.positive.weak .cv-ecg-prediction-bar i {
+  background: var(--warning);
+}
+
+.cv-ecg-prediction-bar b {
+  position: absolute;
+  top: -3px;
+  bottom: -3px;
+
+  width: 2px;
+  margin-left: -1px;
+
+  border-radius: 1px;
+  background: var(--ink);
+}
+
+.cv-ecg-prediction-detail {
+  margin-top: var(--sp-2);
+
+  color: var(--muted);
+  font-size: 10.5px;
+  line-height: 1.6;
+}
+
+.cv-ecg-operating-point {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+
+  margin-top: var(--sp-3);
+  padding-top: var(--sp-3);
+
+  border-top: 1px solid rgba(16, 23, 29, 0.1);
+}
+
+.cv-ecg-operating-point span {
+  max-width: 80ch;
+
+  color: var(--text);
+  font-size: 10.5px;
+  line-height: 1.7;
+}
+
+.cv-ecg-operating-point strong {
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.cv-ecg-caveat {
+  color: var(--muted);
+  font-style: italic;
+}
+
+/* --------------------------------------------------
+   LEAD ATTRIBUTION
+-------------------------------------------------- */
+
+.cv-ecg-leads {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin-top: var(--sp-4);
+}
+
+.cv-ecg-lead-row {
+  display: grid;
+  grid-template-columns: 22px 48px minmax(0, 1fr) 52px;
+  gap: var(--sp-3);
+  align-items: center;
+}
+
+.cv-ecg-lead-rank {
+  color: var(--soft);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  text-align: right;
+}
+
+.cv-ecg-lead-name {
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 500;
+}
+
+.cv-ecg-lead-row strong {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+/* --------------------------------------------------
+   PER-CLASS METRIC TABLE
+-------------------------------------------------- */
+
+.cv-ecg-metric-table {
+  width: 100%;
+  margin-top: var(--sp-3);
+
+  border-collapse: collapse;
+}
+
+.cv-ecg-metric-table th {
+  padding: 0 var(--sp-2) var(--sp-2);
+
+  border-bottom: 1px solid var(--line-strong);
+
+  color: var(--soft);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-align: right;
+  text-transform: uppercase;
+}
+
+.cv-ecg-metric-table th:first-child,
+.cv-ecg-metric-table td:first-child {
+  text-align: left;
+}
+
+.cv-ecg-metric-table td {
+  padding: var(--sp-2);
+
+  border-bottom: 1px solid var(--line);
+
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.cv-ecg-metric-table td:first-child {
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-weight: 500;
+}
+
+/* The row that the macro average hides. Tinted so it is impossible to read
+   the table without noticing which class is dragging it. */
+.cv-ecg-metric-table tr.weak td {
+  background: var(--warning-tint);
+}
+
+.cv-ecg-metric-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.cv-inline-badge.warn {
+  border-color: #ecd4ac;
+  background: var(--warning-tint);
+  color: var(--warning);
+}
+
+/* --------------------------------------------------
+   MODALITY COMPANION FILES
+
+   Named, not counted: a WFDB pair whose .dat was never selected
+   otherwise looks like one perfectly good upload.
+-------------------------------------------------- */
+
+.cv-modality-companions {
+  display: block;
+  margin-top: 2px;
+
+  color: var(--soft);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* --------------------------------------------------
+   RESPONSIVE — ECG result
+-------------------------------------------------- */
+
+@media (max-width: 1180px) {
+  .cv-ecg-headline {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .cv-ecg-calls {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: stretch;
+  }
+}
+
+@media (max-width: 850px) {
+  .cv-ecg-block,
+  .cv-ecg-headline {
+    padding: var(--sp-4);
+  }
+
+  .cv-ecg-prediction-head {
+    flex-direction: column;
+    gap: var(--sp-1);
+    align-items: flex-start;
+  }
+
+  .cv-ecg-prediction-value {
+    align-items: flex-start;
+    text-align: left;
+  }
+
+  .cv-ecg-lead-row {
+    grid-template-columns: 20px 42px minmax(0, 1fr) 44px;
+    gap: var(--sp-2);
+  }
+
+  /* Six numeric columns will not fit; scrolling the table keeps every
+     figure readable, which matters more here than fitting the width. */
+  .cv-ecg-metric-table {
+    display: block;
+    overflow-x: auto;
+    white-space: nowrap;
+  }
+}
+
+/* ==================================================
    RESPONSIVE — ADDITIONS
 
    These come after the existing breakpoints on purpose: the

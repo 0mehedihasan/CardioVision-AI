@@ -22,7 +22,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from config import ECHO_IMAGE_SIZE
+from cardiovision.config import ECHO_IMAGE_SIZE
 
 
 class UnsupportedImageError(ValueError):

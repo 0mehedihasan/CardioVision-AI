@@ -1,0 +1,97 @@
+name: Bug report
+description: Something behaves incorrectly, crashes, or reports the wrong thing.
+labels: [bug]
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Do not attach patient data** — not even a de-identified export.
+        Describe the shape of the input instead, or reproduce it with a
+        synthetic record.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Echo segmentation
+        - ECG classification
+        - Clinical Q&A (MedGemma)
+        - Case storage / sign-in
+        - Frontend
+        - Install / startup
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: And what you expected instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. cardiovision serve --skip medgemma
+        2. Upload …
+        3. Click "Analyze ECG"
+    validations:
+      required: true
+
+  - type: textarea
+    id: input
+    attributes:
+      label: Input description
+      description: >
+        Format, and for an ECG the sampling rate and lead order. A scrambled
+        lead order classifies happily and silently, and it is the most common
+        cause of a confident wrong answer.
+      placeholder: |
+        WFDB .hea + .dat, 500 Hz, 10 s, leads I II III aVR aVL aVF V1–V6
+    validations:
+      required: true
+
+  - type: textarea
+    id: modelcard
+    attributes:
+      label: Model card values
+      description: >
+        Copy the Model block from the result panel — architecture, parameters,
+        best epoch, threshold, device. It pins which checkpoint produced this.
+      render: text
+
+  - type: textarea
+    id: health
+    attributes:
+      label: Output of /api/health
+      description: "`curl -s http://127.0.0.1:8000/api/health`"
+      render: json
+
+  - type: textarea
+    id: env
+    attributes:
+      label: Environment
+      placeholder: |
+        OS: macOS 15.3 (Apple M2)
+        Python: 3.11.9
+        torch: 2.4.0, device mps
+        Node: 22.11.0
+        Install: pip install -e ".[dev]"
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: confirm
+    attributes:
+      label: Before submitting
+      options:
+        - label: This issue contains no patient data
+          required: true
+        - label: I ran `git lfs pull` and the checkpoints are real files, not pointers
+        - label: I ran `cardiovision check` and included anything it reported

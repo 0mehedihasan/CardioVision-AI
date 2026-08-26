@@ -9,14 +9,35 @@ is told never to invent findings, but the reliable way to hold it to that is
 to state explicitly which modalities have no model behind them. Without
 this, a question like "what do the CT findings show?" invites a fabricated
 answer.
+
+The second most important job is that every number arrives with the thing that
+qualifies it. A probability is written next to the precision it was measured
+at; a segmented area is written next to whether the image had pixel spacing; an
+unticked risk-factor box is written as unknown rather than as denied. The point
+is not to hedge everything — it is that the language model reads this text and
+nothing else, so any caveat left out here is a caveat it cannot apply.
+
+This module serves free-form Q&A, where the question is unknown in advance and
+the guard rails therefore have to be exhaustive prose. The report path uses
+:func:`cardiovision.fusion.report.build_report_prompt` instead, which renders
+the same case through the structured evidence layer for one fixed task. Both
+read the stored case dict, so a fact added to one belongs in the other.
 """
 
 from __future__ import annotations
 
 from typing import Any, Optional
 
-from config import MODALITY_STATUS
-from database import derive_age
+from cardiovision.config import (
+    CCTA_PRESENCE_THRESHOLD_VOXELS,
+    CCTA_TEST_METRICS,
+    ECG_ARCHITECTURE,
+    ECG_NORMALIZATION,
+    ECG_TEST_METRICS,
+    ECG_THRESHOLD,
+    MODALITY_STATUS,
+)
+from cardiovision.services.database import derive_age
 
 
 # ============================================================
@@ -249,12 +270,360 @@ def _echo_lines(echo: dict[str, Any]) -> list[str]:
 
 
 # ============================================================
+# ECG SECTION
+# ============================================================
+
+def _probability_text(prediction: dict[str, Any]) -> str:
+    """One class as a line the model can quote without reinterpreting it."""
+    name = prediction.get("name", "?")
+    label = prediction.get("label") or name
+    probability = prediction.get("probability")
+
+    if isinstance(probability, (int, float)):
+        shown = f"{float(probability):.2f}"
+    else:
+        shown = "unknown"
+
+    verdict = "CALLED POSITIVE" if prediction.get("positive") else "not called"
+
+    line = f"    - {label} ({name}): p = {shown} — {verdict}."
+
+    # The operating point only means something for a positive call: it is the
+    # answer to "given the model said this, how often is it right", and that
+    # question is not being asked about the classes it stayed quiet on.
+    operating = prediction.get("operating_point") or {}
+    precision = operating.get("precision")
+
+    if prediction.get("positive") and isinstance(precision, (int, float)):
+        false_rate = 1.0 - float(precision)
+        line += (
+            f" On the held-out test split this class had precision "
+            f"{float(precision):.2f} at this threshold, so about "
+            f"{false_rate * 100:.0f}% of positive calls like it were false."
+        )
+
+    return line
+
+
+def _ecg_lines(ecg: dict[str, Any]) -> list[str]:
+    lines: list[str] = []
+
+    model = ecg.get("model") or {}
+    metrics = model.get("metrics") or {}
+    source = ecg.get("input") or {}
+    preprocessing = ecg.get("preprocessing") or {}
+
+    architecture = model.get("architecture") or ECG_ARCHITECTURE
+
+    lines.append(
+        f"  Model: {architecture}, a 1-D residual CNN screening a 12-lead ECG "
+        "for five PTB-XL diagnostic superclasses. The five outputs are "
+        "INDEPENDENT sigmoids, not a softmax, so any number of them can be "
+        "positive at once and they do not sum to 1."
+    )
+
+    macro_auroc = metrics.get("macro_AUROC") or ECG_TEST_METRICS["macro_AUROC"]
+    records = metrics.get("test_records") or ECG_TEST_METRICS["test_records"]
+    patients = metrics.get("test_patients") or ECG_TEST_METRICS["test_patients"]
+
+    lines.append(
+        f"  Model accuracy on a patient-disjoint held-out test split: macro "
+        f"AUROC {float(macro_auroc):.3f} ({records} recordings from {patients} "
+        "patients). This describes the model in general, NOT the certainty of "
+        "this particular reading, and the macro average hides a wide spread "
+        "between classes — see each class's own precision below."
+    )
+
+    source_format = source.get("format")
+    if source_format:
+        detail = f"  Source recording: {str(source_format).upper()}"
+        record_name = source.get("record_name")
+        if record_name:
+            detail += f", record {record_name}"
+        sampling = source.get("sampling_frequency_hz")
+        if sampling:
+            detail += f", sampled at {sampling} Hz"
+            resampled = source.get("resampled_to_hz")
+            if resampled and resampled != sampling:
+                detail += f" and resampled to {resampled} Hz for the model"
+        lines.append(detail + ".")
+
+    # ---- the five probabilities ----------------------------------
+    predictions = list(ecg.get("predictions") or [])
+    threshold = ecg.get("threshold") or model.get("threshold") or ECG_THRESHOLD
+
+    if predictions:
+        # Highest probability first, so the calls lead and the near-misses sit
+        # directly beneath them rather than being buried in class order.
+        predictions.sort(
+            key=lambda item: item.get("probability") or 0.0, reverse=True
+        )
+
+        lines.append(
+            f"  A class is called positive at p >= {threshold}. Every "
+            "probability is listed, including the ones that were not called, "
+            "so a value sitting just under the line is visible instead of "
+            "being reported as a negative:"
+        )
+        lines.extend(_probability_text(item) for item in predictions)
+
+        positive = [item for item in predictions if item.get("positive")]
+
+        if not positive:
+            lines.append(
+                "  No superclass reached the threshold. That is a real result "
+                "and it is NOT the same as a normal ECG: NORM is itself one of "
+                "the five classes and it was not called either. Report this as "
+                "'no superclass reached the threshold', and do not upgrade it "
+                "to a normal study."
+            )
+
+        # NORM alongside an abnormal call is internally contradictory. The
+        # inference layer already emits a note; saying it here as well means the
+        # contradiction is in front of the model at the point it reads the
+        # numbers, not several sections later.
+        abnormal = [item for item in positive if item.get("name") != "NORM"]
+        if any(item.get("name") == "NORM" for item in positive) and abnormal:
+            names = ", ".join(item.get("name", "?") for item in abnormal)
+            lines.append(
+                f"  CONTRADICTION: NORM was called positive at the same time as "
+                f"{names}. The five outputs are independent, so nothing stops "
+                "this happening, but it means the model is genuinely uncertain. "
+                "Say so rather than choosing whichever answer reads better."
+            )
+
+    # ---- weak classes -------------------------------------------
+    #
+    # Only for classes THIS recording called positive. A standing paragraph
+    # about hypertrophy on every reading is the kind of boilerplate that stops
+    # being read, and the one time it matters is the one time it looks the same
+    # as all the others.
+    warnings = ecg.get("weak_class_warnings") or {}
+
+    if not warnings:
+        warnings = {
+            item.get("name"): item.get("caveat")
+            for item in predictions
+            if item.get("positive") and item.get("caveat")
+        }
+
+    for name, caveat in warnings.items():
+        if name and caveat:
+            lines.append(f"  WARNING — {name} was called positive: {caveat}")
+
+    # ---- lead attribution ----------------------------------------
+    if ecg.get("saliency_available") and ecg.get("lead_attribution"):
+        ranked = list(ecg["lead_attribution"])[:4]
+        named = ", ".join(
+            f"{item.get('name', '?')} ({float(item.get('score') or 0.0):.2f})"
+            for item in ranked
+        )
+        target = ecg.get("saliency_class") or "the leading class"
+        lines.append(
+            f"  Lead attribution for {target}, strongest first: {named}. These "
+            "are input-gradient magnitudes — how much the output moved with "
+            "each lead — scaled to the strongest lead. They indicate where the "
+            "model looked, NOT where an abnormality is, and a high score is "
+            "not evidence that the lead is abnormal."
+        )
+    elif predictions:
+        lines.append(
+            "  No saliency was computed for this recording, so there is no "
+            "information about which leads drove the result. Do not speculate "
+            "about lead involvement."
+        )
+
+    # ---- caveats -------------------------------------------------
+    if source.get("lead_order_matches_training") is False:
+        found = ", ".join(str(name) for name in source.get("lead_names") or [])
+        lines.append(
+            "  WARNING: the leads did not arrive in the order the model was "
+            f"trained on (found: {found}). They were NOT reordered, so every "
+            "probability above may be wrong. Treat the whole reading as "
+            "unreliable and say so if asked."
+        )
+
+    if not source.get("units"):
+        lines.append(
+            "  NOTE: the recording carried no amplitude units, so the "
+            "waveform scale is unverified. Do not quote millivolt amplitudes."
+        )
+
+    normalization = preprocessing.get("normalization") or ECG_NORMALIZATION
+    lines.append(
+        f"  NOTE: the model's input is normalised {normalization}, which "
+        "removes absolute voltage. It therefore cannot apply the millimetre "
+        "voltage criteria a human reader uses — relevant to how weak its "
+        "hypertrophy performance is — and no amplitude in millivolts can be "
+        "attributed to it."
+    )
+
+    lines.append(
+        "  NOTE: this is a screening classifier over five broad superclasses. "
+        "It does not measure heart rate, rhythm, PR/QRS/QT intervals or axis; "
+        "it does not localise an infarct or separate acute from old; it does "
+        "not detect atrial fibrillation, which is not one of its classes; and "
+        "it does not output a diagnosis."
+    )
+
+    return lines
+
+
+# ============================================================
+# CCTA SECTION
+# ============================================================
+
+def _ccta_lines(ccta: dict[str, Any]) -> list[str]:
+    """
+    The CT segmentation result, written so it cannot be read as a CT report.
+
+    A radiology reader seeing "coronary CT angiography" expects stenosis
+    severity and a CAD-RADS category. This model produces neither, and the gap
+    between what the modality name promises and what the model delivers is the
+    single largest fabrication risk in the project — so the limits are stated
+    before the numbers, not after them.
+    """
+    lines: list[str] = []
+
+    model = ccta.get("model") or {}
+    metrics = model.get("metrics") or {}
+    source = ccta.get("input") or {}
+    coverage = ccta.get("coverage") or {}
+    findings = ccta.get("findings") or []
+
+    architecture = model.get("architecture") or "Small3DUNet"
+
+    lines.append(
+        f"  Model: {architecture}, a 3-D U-Net performing BINARY segmentation "
+        "of the contrast-filled coronary lumen. Its entire output is a mask of "
+        "where lumen is."
+    )
+    lines.append(
+        "  This model does NOT grade stenosis, does NOT measure percentage "
+        "narrowing, does NOT compute a calcium score, does NOT assign a "
+        "CAD-RADS category and does NOT identify or name vessels. If asked for "
+        "any of those, say CardioVision does not compute it."
+    )
+
+    dice = metrics.get("test_dice") or CCTA_TEST_METRICS["dice"]
+    hd95 = metrics.get("test_hd95_mm") or CCTA_TEST_METRICS["hd95_mm"]
+    sensitivity = metrics.get("test_sensitivity") or CCTA_TEST_METRICS["sensitivity"]
+    test_cases = metrics.get("test_cases") or CCTA_TEST_METRICS["test_cases"]
+
+    lines.append(
+        f"  Held-out performance: Dice {dice.get('mean'):.4f} "
+        f"(range {dice.get('min'):.4f}-{dice.get('max'):.4f}), sensitivity "
+        f"{sensitivity.get('mean'):.4f}, 95th-percentile Hausdorff distance "
+        f"{hd95.get('mean'):.1f} mm."
+    )
+    lines.append(
+        f"  WARNING — that test split is {test_cases} CASES. Three cases "
+        "support no confidence interval and no claim that the model "
+        "generalises. This is the WEAKEST of CardioVision's three models. The "
+        "Hausdorff figure means the predicted surface can sit tens of "
+        "millimetres from the truth, so the mask's shape and connectivity are "
+        "unreliable even where its volume looks reasonable."
+    )
+    lines.append(
+        "  These numbers describe the model on that cohort. They are NOT the "
+        "certainty of this particular segmentation."
+    )
+
+    threshold = ccta.get("threshold")
+    if threshold is not None:
+        lines.append(
+            f"  A voxel is called lumen at sigmoid p >= {threshold}, chosen on "
+            "the validation split. Every metric above was measured at that "
+            "threshold."
+        )
+
+    shape = source.get("analysed_shape")
+    spacing = source.get("analysed_spacing_mm")
+    if shape and spacing:
+        lines.append(
+            f"  Analysed on a {'x'.join(str(d) for d in shape)} grid at "
+            f"{spacing[0]} mm isotropic, so one voxel is one cubic millimetre."
+        )
+
+    for finding in findings:
+        name = finding.get("name") or "Coronary artery lumen"
+
+        if not finding.get("present"):
+            lines.append(
+                f"  {name}: NOT identified above the reporting cutoff of "
+                f"{CCTA_PRESENCE_THRESHOLD_VOXELS} voxels. Given this model's "
+                f"measured sensitivity of {sensitivity.get('mean'):.2f}, an "
+                "empty mask is as likely to be a miss as a true absence. Do "
+                "NOT report this as normal coronary anatomy and do NOT report "
+                "it as absent vessels."
+            )
+            continue
+
+        volume_ml = finding.get("volume_ml")
+        percent = finding.get("percent_of_analysed")
+        mean_p = finding.get("mean_probability")
+
+        detail = f"  {name}: segmented"
+        if volume_ml is not None:
+            detail += f", {volume_ml} mL"
+        if percent is not None:
+            detail += f" ({percent}% of the analysed volume)"
+        if mean_p is not None:
+            detail += f", mean model output {mean_p}"
+        lines.append(detail + ".")
+
+        components = finding.get("components")
+        largest = finding.get("largest_component_fraction")
+        if components is not None:
+            fragmentation = (
+                f"  The mask is {components} disconnected component"
+                f"{'s' if components != 1 else ''}"
+            )
+            if largest is not None:
+                fragmentation += f", the largest holding {largest:.0%} of the voxels"
+            lines.append(
+                fragmentation
+                + ". A healthy coronary tree is a small number of connected "
+                "vessels, so a high component count means the segmentation is "
+                "fragmented and should be read as unreliable rather than as "
+                "anatomy."
+            )
+
+    if coverage and coverage.get("complete") is False:
+        lines.append(
+            f"  PARTIAL COVERAGE — only {coverage.get('analysed_percent')}% of "
+            "the volume was analysed within the compute budget. Everything "
+            "outside that region was NOT examined. Do not describe it, and do "
+            "not treat the absence of a mask there as a finding."
+        )
+
+    explainability = ccta.get("explainability") or {}
+    if explainability.get("available"):
+        lines.append(
+            "  A 3-D Grad-CAM map is available for ONE 96x96x96 patch of the "
+            "volume. It shows where activation supported the model's own "
+            "output, NOT where disease is, and attention outside that patch "
+            "was never computed."
+        )
+    else:
+        lines.append(
+            "  No Grad-CAM was computed for this volume, so there is no "
+            "information about what the model responded to. Do not speculate "
+            "about which region drove the segmentation."
+        )
+
+    return lines
+
+
+# ============================================================
 # UNAVAILABLE MODALITIES
 # ============================================================
 
 def _unavailable_lines(
     modalities_provided: dict[str, bool],
     echo_analyzed: bool,
+    ecg_analyzed: bool = False,
+    ccta_analyzed: bool = False,
 ) -> list[str]:
     lines: list[str] = []
 
@@ -282,6 +651,26 @@ def _unavailable_lines(
         lines.append(
             "  Echocardiography: no echo image has been analysed in this "
             "case, so no imaging findings are available."
+        )
+
+    # Distinct from the loop above, which covers modalities with no model at
+    # all. There IS an ECG model; this case simply has no ECG through it, and
+    # conflating the two would tell the model the pipeline does not exist.
+    if not ecg_analyzed and MODALITY_STATUS.get("ecg", {}).get("available"):
+        lines.append(
+            "  Electrocardiography: an ECG model is available, but no ECG has "
+            "been analysed in this case, so there are no ECG findings. Do not "
+            "infer a rhythm or an ECG pattern from the other data."
+        )
+
+    # Same distinction for CCTA, which acquired a trained model and so must no
+    # longer be described as a modality without one.
+    if not ccta_analyzed and MODALITY_STATUS.get("ccta", {}).get("available"):
+        lines.append(
+            "  Coronary CT angiography: a CT lumen segmentation model is "
+            "available, but no CT volume has been analysed in this case, so "
+            "there are no CT findings. Do not infer coronary anatomy, stenosis "
+            "or calcification from the other data."
         )
 
     return lines
@@ -330,6 +719,18 @@ def build_case_context(case: Optional[dict[str, Any]]) -> Optional[str]:
             + "\n".join(clinical_lines)
         )
 
+    # ---- ccta ----------------------------------------------------
+    #
+    # First, matching the target architecture's order: CCTA -> echo -> ECG.
+    ccta = case.get("ccta") or {}
+    ccta_analyzed = bool(ccta.get("analyzed")) and bool(ccta.get("findings"))
+
+    if ccta_analyzed:
+        sections.append(
+            "CORONARY CT ANGIOGRAPHY — AI SEGMENTATION RESULT:\n"
+            + "\n".join(_ccta_lines(ccta))
+        )
+
     # ---- echo ----------------------------------------------------
     echo = case.get("echo") or {}
     echo_analyzed = bool(echo.get("analyzed"))
@@ -340,9 +741,25 @@ def build_case_context(case: Optional[dict[str, Any]]) -> Optional[str]:
             + "\n".join(_echo_lines(echo))
         )
 
+    # ---- ecg -----------------------------------------------------
+    #
+    # Presence of predictions is the test, not an `analyzed` flag: the ECG
+    # endpoint has no state in which it returns probabilities it did not
+    # compute, and a stored case carries exactly what the endpoint returned.
+    ecg = case.get("ecg") or {}
+    ecg_analyzed = bool(ecg.get("predictions")) and ecg.get("analyzed") is not False
+
+    if ecg_analyzed:
+        sections.append(
+            "ELECTROCARDIOGRAPHY — AI SCREENING RESULT:\n"
+            + "\n".join(_ecg_lines(ecg))
+        )
+
     # ---- unavailable ---------------------------------------------
     modalities_provided = case.get("modalities_provided") or {}
-    unavailable = _unavailable_lines(modalities_provided, echo_analyzed)
+    unavailable = _unavailable_lines(
+        modalities_provided, echo_analyzed, ecg_analyzed, ccta_analyzed
+    )
 
     if unavailable:
         sections.append(
@@ -350,8 +767,27 @@ def build_case_context(case: Optional[dict[str, Any]]) -> Optional[str]:
             "for any of these:\n" + "\n".join(unavailable)
         )
 
+    # There is no fusion model, so a case carrying more than one modality must
+    # not read as a combined workup. Said once, at the end, where a reader of
+    # the prompt has just seen the sections side by side.
+    analysed_count = sum((ccta_analyzed, echo_analyzed, ecg_analyzed))
+    if analysed_count > 1:
+        sections.append(
+            "HOW TO READ MORE THAN ONE MODALITY:\n"
+            "  The sections above come from independently trained models with "
+            "no multimodal model between them, and they were trained on three "
+            "unrelated public datasets in which no patient appears twice. That "
+            "these inputs belong to one patient is asserted by the operator, "
+            "not established by any model.\n"
+            "  Report each modality in its own terms. Do NOT combine them into "
+            "a single risk score, likelihood or severity grade, and do NOT say "
+            "that one modality confirms, corroborates or is consistent with "
+            "another. You may state that two findings were observed together."
+        )
+
     # Only the boilerplate sections and nothing real to report.
-    if not clinical_lines and not echo_analyzed and not patient_lines:
+    if not clinical_lines and not echo_analyzed and not ecg_analyzed \
+            and not ccta_analyzed and not patient_lines:
         return None
 
     return "\n\n".join(sections).strip()

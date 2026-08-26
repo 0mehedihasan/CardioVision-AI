@@ -1,0 +1,64 @@
+name: Feature or model request
+description: A new capability, a new modality, or a change to how results are reported.
+labels: [enhancement]
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Three of the four notebooks in `notebooks/` have no trained weights
+        behind them — CCTA, clinical risk and multimodal fusion. Requests to
+        "enable" those need weights, not wiring. If you have trained something,
+        say so here and it becomes a real conversation.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What can't you do today
+      description: The clinical or workflow problem, not the implementation.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you have in mind
+    validations:
+      required: true
+
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Kind of change
+      options:
+        - New trained model / modality
+        - Change to an existing model's reporting
+        - New input format
+        - Frontend / workflow
+        - Packaging, deployment or docs
+    validations:
+      required: true
+
+  - type: textarea
+    id: weights
+    attributes:
+      label: If this needs a model, what exists
+      description: >
+        Architecture, dataset, split strategy, and the per-class held-out
+        metrics — not just the macro average. A model whose weak classes are
+        unmeasured cannot be surfaced honestly, so it cannot ship here.
+      placeholder: |
+        Architecture:
+        Dataset and licence:
+        Split: patient-level / record-level
+        Per-class AUROC / AP / precision / recall:
+        Prevalence in the test split:
+
+  - type: textarea
+    id: honesty
+    attributes:
+      label: How should its limits be shown to the reader
+      description: >
+        Every number in this app is displayed with the measurement that
+        qualifies it. What is the weakest thing about this proposal, and where
+        on screen should it appear?

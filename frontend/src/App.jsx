@@ -3,10 +3,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "./App.css";
 
 import {
+  analyzeEcg,
   analyzeEcho,
   askClinicalQuestion,
   deleteCase,
   fetchCase,
+  fetchCaseFigures,
   fetchCaseImages,
   fetchCases,
   fetchHealth,
@@ -18,6 +20,7 @@ import {
   setUnauthorizedHandler,
 } from "./api";
 import CaseList from "./components/CaseList";
+import EcgResult from "./components/EcgResult";
 import EchoResult from "./components/EchoResult";
 import Login from "./components/Login";
 import PatientForm from "./components/PatientForm";
@@ -64,12 +67,42 @@ const modalityConfig = {
   ecg: {
     label: "Electrocardiography",
     short: "ECG",
-    description: "Waveform trace or report",
-    formats: "PNG, JPEG, PDF, CSV",
-    accept: ".png,.jpg,.jpeg,.pdf,.csv",
-    analyzed: false,
+    description: "12-lead recording, 10 s",
+    formats: "WFDB (.hea + .dat), CSV, NPY, JSON, ZIP",
+    accept: ".hea,.dat,.csv,.txt,.tsv,.npy,.json,.zip",
+    analyzed: true,
+    // WFDB splits one recording across a header and a signal file, and
+    // neither is readable alone, so this row has to accept a set.
+    multiple: true,
   },
 };
+
+/*
+ * The header is the only file in a WFDB pair that can be dispatched on: it
+ * declares the layout and names its own signal file. So a multi-file
+ * selection is split rather than rejected — header as the primary, the rest
+ * as companions, which the backend matches by filename.
+ *
+ * A selection with no header sends its first file as the primary and lets the
+ * backend report what it could not read. Guessing which of two .dat files was
+ * meant would turn a clear error into a silent wrong answer.
+ */
+function splitEcgSelection(selected) {
+  const list = Array.from(selected || []).filter(Boolean);
+
+  if (list.length === 0) return { file: null, companions: [] };
+
+  const found = list.findIndex(
+    (candidate) => !candidate.name.toLowerCase().endsWith(".dat")
+  );
+
+  const index = found === -1 ? 0 : found;
+
+  return {
+    file: list[index],
+    companions: list.filter((_, position) => position !== index),
+  };
+}
 
 const navItems = [
   { id: "case", number: "01", label: "Patient case" },
@@ -596,11 +629,11 @@ function CaseWorkspace({
   const [echoFlip, setEchoFlip] = useState(
     Boolean(initialCase?.echo?.orientation?.flip_applied)
   );
-  const [analysisComplete, setAnalysisComplete] = useState(
-    Boolean(initialCase?.echo)
-  );
+
+  const [ecgResult, setEcgResult] = useState(initialCase?.ecg || null);
+
   const [activeResult, setActiveResult] = useState(
-    initialCase?.echo ? "echo" : "overview"
+    initialCase?.echo ? "echo" : initialCase?.ecg ? "ecg" : "overview"
   );
 
   const [conversation, setConversation] = useState(
@@ -611,12 +644,21 @@ function CaseWorkspace({
      server-side, but the browser cannot reconstitute a File from it. The
      archived filename is kept so the UI can still say what was analysed. */
   const [files, setFiles] = useState({ echo: null, ccta: null, ecg: null });
+
+  /* The .dat that goes with a .hea. Held apart from `files` because it is
+     not a study of its own — it is half of one. */
+  const [ecgCompanions, setEcgCompanions] = useState([]);
+
   const restoredFilename =
     initialCase?.echo?.input?.filename || initialCase?.source_file || "";
+  const restoredEcgFilename = initialCase?.ecg?.input?.filename || "";
 
   const [dragOver, setDragOver] = useState(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysisError, setAnalysisError] = useState(null);
+
+  const [isAnalyzingEcg, setIsAnalyzingEcg] = useState(false);
+  const [ecgError, setEcgError] = useState(null);
 
   const [question, setQuestion] = useState("");
   const [isAsking, setIsAsking] = useState(false);
@@ -632,19 +674,21 @@ function CaseWorkspace({
   const inputRefs = { echo: echoInput, ccta: cctaInput, ecg: ecgInput };
 
   const echoModelReady = Boolean(health?.modalities?.echo?.available);
+  const ecgModelReady = Boolean(health?.modalities?.ecg?.available);
   const medgemmaReady = Boolean(health?.models?.medgemma?.loaded);
   const backendOnline = Boolean(health);
 
   /* ==========================================================
-     RESTORED IMAGES
+     RESTORED RENDERS
 
-     Stored renders come back as authenticated endpoints, which an
+     Stored figures come back as authenticated endpoints, which an
      <img> tag cannot fetch on its own. They are pulled as blobs
      and spliced into the restored result, then revoked on unmount
      so switching between cases does not leak them.
      ========================================================== */
 
   const blobUrls = useRef(null);
+  const figureUrls = useRef(null);
 
   useEffect(() => {
     const stored = initialCase?.images;
@@ -681,10 +725,47 @@ function CaseWorkspace({
     };
   }, [initialCase]);
 
+  /* Separate from the echo effect on purpose: the two modalities are stored
+     independently, so a case can hold ECG figures and no echo renders, and
+     one fetch failing must not take the other down with it. */
+  useEffect(() => {
+    const stored = initialCase?.ecg_figures;
+
+    if (!stored || Object.keys(stored).length === 0) return undefined;
+
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const urls = await fetchCaseFigures(stored);
+
+        if (cancelled) {
+          releaseImages(urls);
+          return;
+        }
+
+        figureUrls.current = urls;
+
+        setEcgResult((previous) =>
+          previous ? { ...previous, figures: urls } : previous
+        );
+      } catch {
+        // The probabilities are the result; the strip is how it is read.
+        // Losing the strip must not lose the numbers.
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [initialCase]);
+
   useEffect(
     () => () => {
       releaseImages(blobUrls.current);
+      releaseImages(figureUrls.current);
       blobUrls.current = null;
+      figureUrls.current = null;
     },
     []
   );
@@ -702,12 +783,20 @@ function CaseWorkspace({
   );
 
   const canAnalyze = Boolean(files.echo) && echoModelReady && !isAnalyzing;
+  const canAnalyzeEcg =
+    Boolean(files.ecg) && ecgModelReady && !isAnalyzingEcg;
+
+  /* Derived rather than stored. The results panel opens as soon as either
+     modality has output, and a flag kept alongside the results is a flag that
+     can disagree with them. */
+  const analysisComplete = Boolean(echoResult) || Boolean(ecgResult);
 
   /* Nothing to write is not an error, but it should not be a save either. */
   const canSave =
     hasPatientData ||
     hasClinicalData ||
     Boolean(echoResult) ||
+    Boolean(ecgResult) ||
     conversation.length > 0;
 
   const updatePatient = (field, value) => {
@@ -720,14 +809,29 @@ function CaseWorkspace({
     setDirty(true);
   };
 
-  const handleFile = (modality, file) => {
+  /* `selected` is the raw FileList, because the ECG row accepts a set. */
+  const handleFile = (modality, selected) => {
+    if (modality === "ecg") {
+      const { file, companions } = splitEcgSelection(selected);
+
+      if (!file) return;
+
+      setFiles((previous) => ({ ...previous, ecg: file }));
+      setEcgCompanions(companions);
+      setEcgResult(null);
+      setEcgError(null);
+      setDirty(true);
+      return;
+    }
+
+    const file = selected?.length ? selected[0] : selected;
+
     if (!file) return;
 
     setFiles((previous) => ({ ...previous, [modality]: file }));
     setDirty(true);
 
     if (modality === "echo") {
-      setAnalysisComplete(false);
       setEchoResult(null);
       setAnalysisError(null);
       // A new image gets a clean slate: the previous file's rotation says
@@ -742,11 +846,16 @@ function CaseWorkspace({
     setDirty(true);
 
     if (modality === "echo") {
-      setAnalysisComplete(false);
       setEchoResult(null);
       setAnalysisError(null);
       setEchoRotate(0);
       setEchoFlip(false);
+    }
+
+    if (modality === "ecg") {
+      setEcgCompanions([]);
+      setEcgResult(null);
+      setEcgError(null);
     }
   };
 
@@ -761,8 +870,12 @@ function CaseWorkspace({
 
   const persist = useCallback(
     async (overrides = {}) => {
-      const { silent = false, echo = echoResult, messages = conversation } =
-        overrides;
+      const {
+        silent = false,
+        echo = echoResult,
+        ecg = ecgResult,
+        messages = conversation,
+      } = overrides;
 
       const payload = {
         case_id: overrides.caseId ?? caseId ?? undefined,
@@ -770,6 +883,17 @@ function CaseWorkspace({
         clinical: clinicalData,
         conversation: messages,
       };
+
+      /* Only fresh data URLs need writing. Blob URLs come from a case that is
+         already stored, so re-sending them would ask the backend to decode a
+         string that is not an image. */
+      const freshRenders = (renders) =>
+        Object.fromEntries(
+          Object.entries(renders || {}).filter(
+            ([, value]) =>
+              typeof value === "string" && value.startsWith("data:")
+          )
+        );
 
       if (echo) {
         // The rendered PNGs travel separately: the backend decodes them to
@@ -779,19 +903,26 @@ function CaseWorkspace({
 
         payload.echo = { ...rest, analyzed: true };
 
-        if (images) {
-          // Blob URLs come from a case that is already stored; only fresh
-          // data URLs need writing.
-          const encoded = Object.fromEntries(
-            Object.entries(images).filter(
-              ([, value]) =>
-                typeof value === "string" && value.startsWith("data:")
-            )
-          );
+        const encoded = freshRenders(images);
 
-          if (Object.keys(encoded).length > 0) {
-            payload.images = encoded;
-          }
+        if (Object.keys(encoded).length > 0) {
+          payload.images = encoded;
+        }
+      }
+
+      /* Same split for the ECG, and for the same reason — the strip and the
+         attribution chart are ~160 KB of SVG. The two modalities are written
+         independently: a save carrying one and not the other updates only its
+         own columns, so attaching an ECG cannot blank a stored segmentation. */
+      if (ecg) {
+        const { figures, ...rest } = ecg;
+
+        payload.ecg = { ...rest, analyzed: true };
+
+        const encoded = freshRenders(figures);
+
+        if (Object.keys(encoded).length > 0) {
+          payload.ecg_figures = encoded;
         }
       }
 
@@ -820,7 +951,15 @@ function CaseWorkspace({
         setIsSaving(false);
       }
     },
-    [caseId, patientData, clinicalData, echoResult, conversation, onCasesChanged]
+    [
+      caseId,
+      patientData,
+      clinicalData,
+      echoResult,
+      ecgResult,
+      conversation,
+      onCasesChanged,
+    ]
   );
 
   /* Publish just enough for the header to drive Save and to warn before
@@ -838,9 +977,26 @@ function CaseWorkspace({
   /* ==========================================================
      ANALYSIS
 
-     Calls POST /api/analyze/echo and renders the model's actual
-     output. There are no simulated results anywhere in this flow.
+     Calls POST /api/analyze/echo and POST /api/analyze/ecg and
+     renders the models' actual output. There are no simulated
+     results anywhere in this flow.
+
+     The two run separately rather than behind one button. They are
+     independent models on independent studies, each takes real time,
+     and re-running one must never quietly re-run the other.
      ========================================================== */
+
+  /* Both analyses need a case row to exist first, so the backend can file the
+     source recording under it. Running a study is a real commitment, so
+     creating the record at that moment is the honest behaviour — and it is
+     what stops a completed analysis from evaporating on refresh. */
+  const ensureCase = useCallback(async () => {
+    if (caseId || !storageReady) return caseId;
+
+    const stored = await persist({ silent: true });
+
+    return stored?.case_id || null;
+  }, [caseId, storageReady, persist]);
 
   const runAnalysis = useCallback(
     async (overrides = {}) => {
@@ -852,23 +1008,12 @@ function CaseWorkspace({
       setIsAnalyzing(true);
       setAnalysisError(null);
       setEchoResult(null);
-      setAnalysisComplete(false);
       setEchoRotate(rotate);
       setEchoFlip(flip);
 
       scrollToSection("results");
 
-      /* The case row has to exist before analysis so the backend can file
-         the source image under it. Running a study is a real commitment,
-         so creating the record at that moment is the honest behaviour —
-         and it is what stops a completed analysis from evaporating on
-         refresh. */
-      let targetCase = caseId;
-
-      if (!targetCase && storageReady) {
-        const stored = await persist({ silent: true });
-        targetCase = stored?.case_id || null;
-      }
+      const targetCase = await ensureCase();
 
       try {
         const result = await analyzeEcho(files.echo, {
@@ -878,7 +1023,6 @@ function CaseWorkspace({
         });
 
         setEchoResult(result);
-        setAnalysisComplete(true);
         setActiveResult("echo");
 
         if (storageReady) {
@@ -904,8 +1048,8 @@ function CaseWorkspace({
       isAnalyzing,
       echoRotate,
       echoFlip,
-      caseId,
       storageReady,
+      ensureCase,
       persist,
       scrollToSection,
       onReloadHealth,
@@ -919,6 +1063,53 @@ function CaseWorkspace({
     (rotate, flip) => runAnalysis({ rotate, flip }),
     [runAnalysis]
   );
+
+  const runEcgAnalysis = useCallback(async () => {
+    if (!files.ecg || !ecgModelReady || isAnalyzingEcg) return;
+
+    setIsAnalyzingEcg(true);
+    setEcgError(null);
+    setEcgResult(null);
+
+    scrollToSection("results");
+
+    const targetCase = await ensureCase();
+
+    try {
+      const result = await analyzeEcg(files.ecg, {
+        companions: ecgCompanions,
+        caseId: targetCase || undefined,
+      });
+
+      setEcgResult(result);
+      setActiveResult("ecg");
+
+      if (storageReady) {
+        await persist({
+          silent: true,
+          ecg: result,
+          caseId: targetCase || undefined,
+        });
+      } else {
+        setDirty(true);
+      }
+    } catch (error) {
+      setEcgError(error.message);
+      onReloadHealth();
+    } finally {
+      setIsAnalyzingEcg(false);
+    }
+  }, [
+    files.ecg,
+    ecgCompanions,
+    ecgModelReady,
+    isAnalyzingEcg,
+    storageReady,
+    ensureCase,
+    persist,
+    scrollToSection,
+    onReloadHealth,
+  ]);
 
   /* ==========================================================
      CASE STATE FOR THE LANGUAGE MODEL
@@ -945,13 +1136,35 @@ function CaseWorkspace({
             quantification: echoResult.quantification,
           }
         : { analyzed: false },
+      /* The figures are left out — the language model cannot read an SVG —
+         but everything that qualifies a number is sent: the threshold that
+         defined a call, the per-class operating points inside `predictions`,
+         the weak-class warnings, whether saliency existed at all, and the
+         lead order and units from the source. The backend renders that into
+         prompt text, and a caveat missing from it is a caveat the model
+         cannot apply. */
+      ecg: ecgResult
+        ? {
+            analyzed: true,
+            model: ecgResult.model,
+            input: ecgResult.input,
+            preprocessing: ecgResult.preprocessing,
+            predictions: ecgResult.predictions,
+            positive_classes: ecgResult.positive_classes,
+            threshold: ecgResult.threshold,
+            weak_class_warnings: ecgResult.weak_class_warnings,
+            saliency_available: ecgResult.saliency_available,
+            saliency_class: ecgResult.saliency_class,
+            lead_attribution: ecgResult.lead_attribution,
+          }
+        : { analyzed: false },
       modalities_provided: {
         echo: Boolean(files.echo) || Boolean(echoResult),
         ccta: Boolean(files.ccta),
-        ecg: Boolean(files.ecg),
+        ecg: Boolean(files.ecg) || Boolean(ecgResult),
       },
     }),
-    [caseId, patientData, clinicalData, echoResult, files]
+    [caseId, patientData, clinicalData, echoResult, ecgResult, files]
   );
 
   const askQuestion = async (text) => {
@@ -1004,7 +1217,7 @@ function CaseWorkspace({
     { label: "Clinical", active: hasClinicalData },
     { label: "Echo findings", active: Boolean(echoResult) },
     { label: "CCTA", active: false, unavailable: true },
-    { label: "ECG", active: false, unavailable: true },
+    { label: "ECG findings", active: Boolean(ecgResult) },
   ];
 
   const savedLabel = savedAt ? formatTimestamp(savedAt) : "";
@@ -1021,9 +1234,9 @@ function CaseWorkspace({
         <h1>Understand the heart through multimodal AI.</h1>
 
         <p>
-          Echocardiography segmentation runs locally on a trained UNet++
-          model. CCTA, ECG and clinical risk models are still in development
-          and are clearly marked as unavailable.
+          Echocardiography segmentation and 12-lead ECG classification run
+          locally on trained models. CCTA, clinical risk and multimodal fusion
+          have no models behind them and are clearly marked as unavailable.
         </p>
       </section>
 
@@ -1047,6 +1260,22 @@ function CaseWorkspace({
             {health?.modalities?.echo?.note ||
               health?.models?.echo?.error ||
               "The segmentation model did not load."}
+          </span>
+
+          <button className="cv-secondary-button" onClick={onReloadHealth}>
+            Recheck
+          </button>
+        </div>
+      )}
+
+      {backendOnline && !ecgModelReady && (
+        <div className="cv-banner warning">
+          <strong>ECG model unavailable</strong>
+
+          <span>
+            {health?.modalities?.ecg?.note ||
+              health?.models?.ecg?.error ||
+              "The ECG classification model did not load."}
           </span>
 
           <button className="cv-secondary-button" onClick={onReloadHealth}>
@@ -1140,9 +1369,18 @@ function CaseWorkspace({
 
             {restoredFilename && !files.echo && (
               <div className="cv-restored-note">
-                Restored from the saved record: <code>{restoredFilename}</code>.
-                The findings below are the stored ones. Re-select the file to
-                run the model again.
+                Echo restored from the saved record:{" "}
+                <code>{restoredFilename}</code>. The findings below are the
+                stored ones. Re-select the file to run the model again.
+              </div>
+            )}
+
+            {restoredEcgFilename && !files.ecg && (
+              <div className="cv-restored-note">
+                ECG restored from the saved record:{" "}
+                <code>{restoredEcgFilename}</code>. Re-select the recording —
+                with its <code>.dat</code>, if it is WFDB — to classify it
+                again.
               </div>
             )}
 
@@ -1152,10 +1390,11 @@ function CaseWorkspace({
                   key={key}
                   modality={modality}
                   file={files[key]}
+                  companions={key === "ecg" ? ecgCompanions : []}
                   inputRef={inputRefs[key]}
                   isDragOver={dragOver === key}
                   onDragOver={(over) => setDragOver(over ? key : null)}
-                  onUpload={(file) => handleFile(key, file)}
+                  onUpload={(selected) => handleFile(key, selected)}
                   onRemove={() => removeFile(key)}
                 />
               ))}
@@ -1166,20 +1405,39 @@ function CaseWorkspace({
         <div className="cv-analysis-bar">
           <div>
             <div className="cv-analysis-title">
-              {files.echo
-                ? "Ready to segment echocardiography"
-                : "An echo image is required to run analysis"}
+              {files.echo || files.ecg
+                ? `Ready to run ${[
+                    files.echo ? "echo segmentation" : null,
+                    files.ecg ? "ECG classification" : null,
+                  ]
+                    .filter(Boolean)
+                    .join(" and ")}`
+                : "An echo image or an ECG recording is required to run analysis"}
             </div>
 
+            {/* Each modality runs on its own button, so the subtitle names
+                what is loaded for each rather than implying one action. */}
             <div className="cv-analysis-subtitle">
-              {files.echo
-                ? `${files.echo.name} · ${
+              {files.echo || files.ecg
+                ? [
+                    files.echo ? `Echo: ${files.echo.name}` : null,
+                    files.ecg
+                      ? `ECG: ${files.ecg.name}${
+                          ecgCompanions.length
+                            ? ` + ${ecgCompanions
+                                .map((companion) => companion.name)
+                                .join(", ")}`
+                            : ""
+                        }`
+                      : null,
                     hasClinicalData
                       ? "clinical data will be passed to the case assistant"
-                      : "no clinical data entered"
-                  }`
-                : "Echocardiography is the only trained imaging model. " +
-                  "Clinical data alone can still be discussed in the case assistant."}
+                      : "no clinical data entered",
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")
+                : "Echo and ECG are the two trained models. Clinical data " +
+                  "alone can still be discussed in the case assistant."}
             </div>
           </div>
 
@@ -1205,6 +1463,24 @@ function CaseWorkspace({
               ) : (
                 <>
                   Analyze echo
+                  <span aria-hidden="true">→</span>
+                </>
+              )}
+            </button>
+
+            <button
+              className={`cv-primary-button ${isAnalyzingEcg ? "loading" : ""}`}
+              disabled={!canAnalyzeEcg}
+              onClick={() => runEcgAnalysis()}
+            >
+              {isAnalyzingEcg ? (
+                <>
+                  <span className="cv-button-spinner" />
+                  Classifying
+                </>
+              ) : (
+                <>
+                  Analyze ECG
                   <span aria-hidden="true">→</span>
                 </>
               )}
@@ -1241,33 +1517,47 @@ function CaseWorkspace({
 
         {analysisError && (
           <div className="cv-banner error">
-            <strong>Analysis failed</strong>
+            <strong>Echo analysis failed</strong>
 
             <span>{analysisError}</span>
           </div>
         )}
 
-        {!analysisComplete && !isAnalyzing && !analysisError && (
-          <div className="cv-empty-analysis">
-            <div className="cv-empty-icon">◌</div>
+        {ecgError && (
+          <div className="cv-banner error">
+            <strong>ECG analysis failed</strong>
 
-            <h3>No analysis generated yet</h3>
-
-            <p>
-              Upload an echocardiography image above, then run the
-              segmentation model.
-            </p>
-
-            <button
-              className="cv-secondary-button"
-              onClick={() => scrollToSection("case")}
-            >
-              Configure patient case
-            </button>
+            <span>{ecgError}</span>
           </div>
         )}
 
+        {!analysisComplete &&
+          !isAnalyzing &&
+          !isAnalyzingEcg &&
+          !analysisError &&
+          !ecgError && (
+            <div className="cv-empty-analysis">
+              <div className="cv-empty-icon">◌</div>
+
+              <h3>No analysis generated yet</h3>
+
+              <p>
+                Upload an echocardiography image or a 12-lead ECG above, then
+                run the model for that modality.
+              </p>
+
+              <button
+                className="cv-secondary-button"
+                onClick={() => scrollToSection("case")}
+              >
+                Configure patient case
+              </button>
+            </div>
+          )}
+
         {isAnalyzing && <AnalysisLoader />}
+
+        {isAnalyzingEcg && <EcgLoader />}
 
         {analysisComplete && (
           <div className="cv-results">
@@ -1276,7 +1566,7 @@ function CaseWorkspace({
                 ["overview", "Overview", true],
                 ["echo", "Echo", true],
                 ["ccta", "CCTA", false],
-                ["ecg", "ECG", false],
+                ["ecg", "ECG", true],
                 ["clinical", "Clinical", false],
               ].map(([id, label, available]) => (
                 <button
@@ -1297,11 +1587,13 @@ function CaseWorkspace({
             {activeResult === "overview" && (
               <OverviewResult
                 echoResult={echoResult}
+                ecgResult={ecgResult}
                 files={files}
                 clinicalData={clinicalData}
                 patientData={patientData}
                 hasClinicalData={hasClinicalData}
                 restoredFilename={restoredFilename}
+                restoredEcgFilename={restoredEcgFilename}
               />
             )}
 
@@ -1331,14 +1623,19 @@ function CaseWorkspace({
               />
             )}
 
-            {activeResult === "ecg" && (
-              <PendingModel
-                label="Electrocardiography"
-                file={files.ecg}
-                note="There is no ECG pipeline yet — no training notebook and no model."
-                requirement="An ECG training pipeline and a saved model in models/ecg/."
-              />
-            )}
+            {activeResult === "ecg" &&
+              (ecgResult ? (
+                <EcgResult result={ecgResult} />
+              ) : (
+                <div className="cv-empty-analysis">
+                  <p>
+                    {files.ecg
+                      ? "This recording has not been classified yet — run " +
+                        "“Analyze ECG” above."
+                      : "No ECG was analysed in this case."}
+                  </p>
+                </div>
+              ))}
 
             {activeResult === "clinical" && (
               <ClinicalResult clinicalData={clinicalData} />
@@ -1357,13 +1654,17 @@ function CaseWorkspace({
             <div>
               <div className="cv-section-index">03 / Explainability</div>
 
-              <h2>See what the model responded to</h2>
+              <h2>See what the echo model responded to</h2>
 
               <p>
                 {echoResult.explainability?.available
                   ? echoResult.explainability?.description
                   : "No attribution map was produced for this run, so " +
                     "there is nothing to show here."}
+                {ecgResult
+                  ? " ECG attribution is per-lead rather than per-pixel, so " +
+                    "it lives with the waveform on the ECG tab above."
+                  : ""}
               </p>
             </div>
           </div>
@@ -1452,8 +1753,9 @@ function CaseWorkspace({
 
             <p>
               Query the local medical language model. When a case has clinical
-              data or echo findings, they are sent as context and the model is
-              told which modalities are unavailable.
+              data, echo findings or an ECG result, they are sent as context —
+              every probability with the operating point it was measured at —
+              and the model is told which modalities are unavailable.
             </p>
           </div>
 
@@ -1773,6 +2075,7 @@ function ClinicalForm({ data, onChange }) {
 function ModalityRow({
   modality,
   file,
+  companions = [],
   inputRef,
   isDragOver,
   onDragOver,
@@ -1780,6 +2083,10 @@ function ModalityRow({
   onRemove,
 }) {
   const status = file ? "ready" : "empty";
+
+  const totalBytes =
+    (file?.size || 0) +
+    companions.reduce((sum, companion) => sum + (companion?.size || 0), 0);
 
   return (
     <div
@@ -1794,7 +2101,7 @@ function ModalityRow({
       onDrop={(event) => {
         event.preventDefault();
         onDragOver(false);
-        onUpload(event.dataTransfer.files?.[0]);
+        onUpload(event.dataTransfer.files);
       }}
     >
       <div className="cv-modality-icon">{modality.short}</div>
@@ -1812,9 +2119,18 @@ function ModalityRow({
           {file ? file.name : modality.description}
         </div>
 
+        {/* Companions are named, not just counted. A WFDB pair where the .dat
+            was never selected still shows one loaded file, and "record.hea"
+            alone will fail at decode with nothing on screen to explain why. */}
+        {companions.length > 0 && (
+          <div className="cv-modality-companions">
+            + {companions.map((companion) => companion.name).join(", ")}
+          </div>
+        )}
+
         <div className="cv-modality-formats">
           {file
-            ? `${(file.size / 1024 / 1024).toFixed(2)} MB`
+            ? `${(totalBytes / 1024 / 1024).toFixed(2)} MB`
             : modality.formats}
         </div>
       </div>
@@ -1840,7 +2156,7 @@ function ModalityRow({
             className="cv-ghost-button"
             onClick={() => inputRef.current?.click()}
           >
-            Select file
+            {modality.multiple ? "Select file(s)" : "Select file"}
           </button>
         )}
 
@@ -1848,8 +2164,9 @@ function ModalityRow({
           ref={inputRef}
           type="file"
           accept={modality.accept}
+          multiple={Boolean(modality.multiple)}
           hidden
-          onChange={(event) => onUpload(event.target.files?.[0])}
+          onChange={(event) => onUpload(event.target.files)}
         />
       </div>
     </div>
@@ -1894,6 +2211,31 @@ function LoaderStep({ number, text, active }) {
   );
 }
 
+function EcgLoader() {
+  return (
+    <div className="cv-analysis-loader">
+      <div className="cv-loader-spinner" />
+
+      <div>
+        <h3>Classifying the 12-lead ECG</h3>
+
+        <p>
+          Filtering and resampling the recording to the training chain, running
+          the 1-D residual CNN, then taking the input gradient for the leading
+          class. First run also loads the weights.
+        </p>
+      </div>
+
+      <div className="cv-loader-steps">
+        <LoaderStep number="01" text="Decoding leads" active />
+        <LoaderStep number="02" text="Bandpass + resample" active />
+        <LoaderStep number="03" text="Classification" active />
+        <LoaderStep number="04" text="Lead attribution" active />
+      </div>
+    </div>
+  );
+}
+
 /* ============================================================
    OVERVIEW RESULT
 
@@ -1904,11 +2246,13 @@ function LoaderStep({ number, text, active }) {
 
 function OverviewResult({
   echoResult,
+  ecgResult,
   files,
   clinicalData,
   patientData,
   hasClinicalData,
   restoredFilename,
+  restoredEcgFilename,
 }) {
   const structures = echoResult?.structures || [];
   const present = structures.filter((structure) => structure.present);
@@ -1922,6 +2266,26 @@ function OverviewResult({
 
   const echoName =
     files.echo?.name || echoResult?.input?.filename || restoredFilename;
+  const ecgName =
+    files.ecg?.name || ecgResult?.input?.filename || restoredEcgFilename;
+
+  const predictions = ecgResult?.predictions || [];
+  const positives = ecgResult?.positive_classes || [];
+  const ecgAnalysed = predictions.length > 0;
+
+  /* Two separate summaries rather than one blended sentence. There is no model
+     here that combines them, so a single "case finding" line would be an
+     inference this system never made. */
+  const headline = [
+    echoResult
+      ? `echocardiography segmented — ${present.length} of ${foregroundCount} structures identified`
+      : null,
+    ecgAnalysed
+      ? positives.length === 0
+        ? "ECG classified — no superclass reached the threshold"
+        : `ECG classified — ${positives.join(", ")} called positive`
+      : null,
+  ].filter(Boolean);
 
   return (
     <div className="cv-overview">
@@ -1930,28 +2294,44 @@ function OverviewResult({
           <span className="cv-card-kicker">What was computed</span>
 
           <h3>
-            {echoResult
-              ? `Echocardiography segmented — ${present.length} of ${foregroundCount} structures identified`
+            {headline.length > 0
+              ? headline
+                  .join("; ")
+                  .replace(/^./, (first) => first.toUpperCase())
               : "No imaging analysis in this case"}
           </h3>
 
           <p>
-            {echoResult
-              ? "The echo model outlined cardiac structures in the supplied " +
-                "frame. This is anatomical segmentation, not a diagnosis or " +
-                "a risk score."
-              : "Upload an echocardiography image to run the only trained " +
-                "imaging model."}
+            {headline.length > 0
+              ? "Each modality is reported on its own. Nothing here combines " +
+                "them — there is no fusion model — and none of it is a " +
+                "diagnosis or a risk score."
+              : "Upload an echocardiography image or a 12-lead ECG to run one " +
+                "of the two trained models."}
           </p>
         </div>
 
         {echoResult && (
           <div className="cv-summary-confidence">
-            <span>Model test Dice</span>
+            <span>Echo test Dice</span>
 
             <strong>{echoResult.model?.metrics?.test_dice}</strong>
 
             <em>dataset-level, not per-case</em>
+          </div>
+        )}
+
+        {ecgAnalysed && (
+          <div className="cv-summary-confidence">
+            <span>ECG macro AUROC</span>
+
+            <strong>
+              {typeof ecgResult.model?.metrics?.macro_AUROC === "number"
+                ? ecgResult.model.metrics.macro_AUROC.toFixed(3)
+                : "—"}
+            </strong>
+
+            <em>hides a weak class — see the ECG tab</em>
           </div>
         )}
       </div>
@@ -1965,7 +2345,11 @@ function OverviewResult({
 
         <Metric label="CCTA" value="No model" tone="muted" />
 
-        <Metric label="ECG" value="No model" tone="muted" />
+        <Metric
+          label="ECG classification"
+          value={ecgAnalysed ? "Complete" : "Not run"}
+          tone={ecgAnalysed ? "" : "muted"}
+        />
 
         <Metric label="Clinical risk score" value="No model" tone="muted" />
       </div>
@@ -1993,6 +2377,28 @@ function OverviewResult({
             />
           ))}
         </div>
+
+        {/* All five, in probability order, with the call shown — not just the
+            positives. A class sitting at 0.46 is a near-miss, and dropping it
+            from the summary would report it as a negative. */}
+        {ecgAnalysed && (
+          <div className="cv-finding-card">
+            <span className="cv-card-kicker">ECG superclasses</span>
+
+            {[...predictions]
+              .sort((a, b) => (b.probability ?? 0) - (a.probability ?? 0))
+              .map((prediction) => (
+                <Finding
+                  key={prediction.name}
+                  title={prediction.label || prediction.name}
+                  value={`p ${(prediction.probability ?? 0).toFixed(2)}${
+                    prediction.positive ? " · called" : ""
+                  }`}
+                  muted={!prediction.positive}
+                />
+              ))}
+          </div>
+        )}
 
         <div className="cv-finding-card cv-next-step">
           <span className="cv-card-kicker">Case inputs</span>
@@ -2022,13 +2428,16 @@ function OverviewResult({
             </li>
 
             <li>
-              ECG: {files.ecg ? `${files.ecg.name} (not analysed)` : "none"}
+              ECG:{" "}
+              {ecgName
+                ? `${ecgName}${ecgAnalysed ? "" : " (not analysed)"}`
+                : "none"}
             </li>
           </ul>
 
           <p>
-            Review the segmentation and explainability output before drawing
-            any clinical conclusion.
+            Review each modality's own tab, and its explainability output,
+            before drawing any clinical conclusion.
           </p>
         </div>
       </div>

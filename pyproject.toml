@@ -1,0 +1,137 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cardiovision"
+version = "4.0.0"
+description = "Locally deployed cardiovascular AI: echo segmentation, 12-lead ECG classification, and MedGemma clinical Q&A."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+keywords = [
+    "medical-imaging",
+    "echocardiography",
+    "electrocardiography",
+    "ecg",
+    "segmentation",
+    "deep-learning",
+    "explainable-ai",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Healthcare Industry",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Scientific/Engineering :: Medical Science Apps.",
+]
+
+# Lower bounds, not pins.
+#
+# A pin on torch or numpy in an application whose whole point is running on
+# whatever accelerator the operator has is a portability bug, not a
+# reproducibility feature: it is how an Apple Silicon install ends up on a CPU
+# wheel. The bounds below are the versions the checkpoints were produced and
+# loaded under. For a byte-identical environment, generate a lock file from a
+# working install rather than tightening these.
+dependencies = [
+    # --- API server ---
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "python-multipart>=0.0.9",       # multipart file upload
+    "pydantic>=2.7",
+
+    # --- Deep learning runtime ---
+    "torch>=2.3",
+    "transformers>=4.45",            # MedGemma (AutoModelForImageTextToText)
+    "accelerate>=0.30",              # device_map support
+    "safetensors>=0.4",
+    "sentencepiece>=0.2",            # MedGemma tokenizer
+
+    # --- Echo segmentation (UNet++ / EfficientNet-B3) ---
+    # Needed to rebuild the architecture before loading the checkpoint. The
+    # encoder is built with encoder_weights=None, so nothing is downloaded at
+    # inference time and the backend stays fully offline.
+    "segmentation-models-pytorch>=0.3.3",
+    "timm>=0.9.7",
+
+    # --- Signal and image I/O ---
+    "numpy>=1.26",
+    "scipy>=1.11",                   # ECG bandpass + resampling
+    "Pillow>=10.3",                  # PNG / JPEG, and the saliency encoders
+    "nibabel>=5.2",                  # NIfTI — native CAMUS format
+    "pydicom>=2.4",                  # DICOM, including multi-frame cine loops
+    "pylibjpeg>=2.0",                # JPEG-compressed DICOM transfer syntaxes
+    "pylibjpeg-libjpeg>=2.1",
+]
+
+[project.optional-dependencies]
+# Everything needed to run the test suites and lint the tree.
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "httpx>=0.27",                   # fastapi.testclient
+    "ruff>=0.6",
+]
+
+# Re-running the training notebooks locally instead of on Kaggle.
+notebooks = [
+    "pandas>=2.2",
+    "matplotlib>=3.8",
+    "scikit-learn>=1.4",
+    "tqdm>=4.66",
+    "jupyter>=1.0",
+    "wfdb>=4.1",                     # PTB-XL download and inspection
+]
+
+[project.scripts]
+cardiovision = "cardiovision.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/mehedi/CardioVision-AI"
+Repository = "https://github.com/mehedi/CardioVision-AI"
+Issues = "https://github.com/mehedi/CardioVision-AI/issues"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Only the wrapper is collected. The suites themselves are executable scripts
+# that stub whatever part of the ML stack is absent and print a readable report,
+# which is what makes them usable on a machine where torch was never installed —
+# so `python tests/<name>.py` is the primary way to run one. tests/test_all.py
+# gives pytest one test per suite by running each as a subprocess.
+#
+# Pointing this at "test_*.py" instead would make pytest import the suites and
+# execute their top-level assertions during collection, where the architecture
+# suite's deliberate sys.exit(0) for an unresolved LFS pointer reads as a
+# collection error rather than as the skip it is.
+python_files = ["test_all.py"]
+addopts = "-ra --strict-markers"
+
+[tool.ruff]
+line-length = 88
+target-version = "py310"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM"]
+ignore = [
+    # The renderers and config are wide tables of constants and drawing maths;
+    # wrapping them to 88 columns makes them harder to check against the
+    # notebooks they mirror.
+    "E501",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# The test suites are scripts: they import after adjusting sys.path so they can
+# run from a checkout without being installed first.
+"tests/*" = ["E402"]

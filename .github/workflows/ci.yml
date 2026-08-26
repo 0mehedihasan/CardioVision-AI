@@ -1,0 +1,125 @@
+name: CI
+
+# The verification suites are the point of this workflow. They deliberately run
+# without torch, without SciPy and without the model weights — every one of them
+# either stubs the ML stack or skips the part that needs it, and says which —
+# so CI is fast and does not burn LFS bandwidth on a 46 MB checkpoint per run.
+#
+# What that means, stated plainly: a green tick here does NOT mean a forward
+# pass ran. It means the wiring, the schema, the prompt construction, the
+# figure rendering and the architecture-vs-checkpoint comparison hold. Numerical
+# model behaviour is verified on a machine with the real stack installed.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# A new push supersedes the run it interrupted.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # ==================================================
+  # BACKEND
+  # ==================================================
+  python:
+    name: Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # No LFS: the architecture suite detects an unresolved pointer file
+          # and skips with a message instead of failing.
+          lfs: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      # NumPy is the only third-party import the suites make. Installing the
+      # full dependency set would pull in torch — several minutes and ~2.5 GB
+      # for code paths these tests do not reach.
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install "numpy>=1.26" ruff pytest
+
+      - name: Lint
+        run: ruff check src tests
+
+      # Run as scripts rather than under pytest: each prints a per-assertion
+      # report and exits non-zero on the first failure, so a red run names the
+      # broken invariant in the log rather than in a traceback.
+      - name: Case lifecycle and storage
+        run: python tests/test_case_lifecycle.py
+
+      - name: ECG architecture vs checkpoint
+        run: python tests/test_ecg_architecture.py
+
+      - name: ECG preprocessing pipeline
+        run: python tests/test_ecg_pipeline.py
+
+      - name: ECG figure rendering
+        run: python tests/test_ecg_rendering.py
+
+      - name: ECG reporting and honesty rules
+        run: python tests/test_ecg_reporting.py
+
+      # The documented `pytest` route, exercised so it cannot rot. It runs the
+      # same five scripts as subprocesses, so this step is a check on the wrapper
+      # and the pyproject collection settings rather than on the suites.
+      - name: pytest wrapper
+        run: pytest -q
+
+      # The package has to import from an installed layout too, not only from
+      # the sys.path shim the suites use. This catches a module that resolves in
+      # a checkout and not in a wheel.
+      - name: Import from an installed package
+        run: |
+          python -m pip install --no-deps -e .
+          python -c "import cardiovision; print(cardiovision.__version__)"
+          python -c "from cardiovision import config; print(config.PROJECT_ROOT)"
+
+  # ==================================================
+  # FRONTEND
+  # ==================================================
+  frontend:
+    name: Frontend build
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      # The only place the JSX is actually parsed and compiled. Everything the
+      # Python suites assert about the frontend is a static string match, which
+      # cannot see a syntax error.
+      - name: Build
+        run: npm run build

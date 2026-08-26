@@ -42,7 +42,7 @@ import time
 from dataclasses import dataclass
 from typing import Optional
 
-from config import (
+from cardiovision.config import (
     AUTH_DEFAULT_PASSWORD,
     AUTH_DEFAULT_USERNAME,
     AUTH_SESSION_TTL_SECONDS,

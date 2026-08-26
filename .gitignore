@@ -1,26 +1,52 @@
-# Python
+# ==================================================
+# CardioVision AI
+# ==================================================
+
+# ---- Python ----
 .venv/
+venv/
+env/
 __pycache__/
-*.pyc
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.ipynb_checkpoints/
 
-# macOS
-.DS_Store
-
-# Node
+# ---- Node / frontend ----
 frontend/node_modules/
 frontend/dist/
 
-# Environment
+# ---- OS ----
+.DS_Store
+Thumbs.db
+
+# ---- Environment ----
+# .env holds the operator password when it is overridden. .env.example is
+# committed and is the file to read; .env itself never is.
 .env
 .env.*
+!.env.example
 
-# Large model files
+# ---- Large weights ----
+#
+# The two trained checkpoints ARE tracked, via Git LFS — see .gitattributes.
+# They are what makes this repo runnable, so ignoring *.pt / *.pth here would
+# silently defeat the LFS configuration and leave a clone that installs
+# cleanly and then cannot load a model.
+#
+# MedGemma is different: 8.6 GB of vendor weights that belong to Google and are
+# a `huggingface-cli download` away, so the directory stays out of the repo.
 models/medgemma-1.5-4b-it/
 *.safetensors
 *.bin
-*.pt
-*.pth
 
-# Data
+# ---- Patient data ----
+#
+# data/.gitignore covers the database and per-case files. This entry keeps the
+# top level honest for anything else written there at runtime.
 data/*
+!data/.gitignore
 !data/sample/
