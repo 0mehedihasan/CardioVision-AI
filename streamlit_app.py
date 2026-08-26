@@ -21,8 +21,12 @@ several gigabytes between them. Each is loaded on first use behind
 ``st.cache_resource`` and then reused for the life of the server process — the
 dashboard reports load state without triggering a load.
 
-The case store is the same SQLite database the API writes to, because a second
-database would be a second set of patient records.
+**Nothing is persisted.** The React client owns case management: patient records,
+the SQLite store and the case lifecycle belong to the authenticated application.
+This interface has no login, so it writes nothing — an analysis lives in
+``st.session_state`` for as long as the browser tab does and is gone afterwards.
+It opens no database, which is also what makes it safe to run somewhere the
+patient store must not exist.
 """
 
 from __future__ import annotations
@@ -60,6 +64,7 @@ from cardiovision.config import (  # noqa: E402
     ECG_CLASS_NAMES,
     ECG_THRESHOLD,
     ECHO_TRAINING_ORIENTATION,
+    MEDGEMMA_PATH,
     MODALITY_STATUS,
     SAMPLES_DIR,
 )
@@ -79,7 +84,6 @@ from cardiovision.inference.medgemma import (  # noqa: E402
     medgemma,
 )
 from cardiovision.services.case_context import build_case_context  # noqa: E402
-from cardiovision.services.database import media_type_for, store  # noqa: E402
 
 # ============================================================
 # PAGE
@@ -104,7 +108,6 @@ SECTIONS = (
     "ECG",
     "AI Assistant",
     "Sample Cases",
-    "Case Management",
     "About / Developer",
 )
 
@@ -175,20 +178,26 @@ def load_model(key: str) -> tuple[Optional[Any], Optional[str]]:
     return model, None
 
 
-@st.cache_resource(show_spinner=False)
-def open_store() -> tuple[bool, Optional[str]]:
+def medgemma_state() -> tuple[bool, Optional[str]]:
     """
-    Connect to the shared case database. Returns ``(ready, error)``.
+    Whether the language model can be used, without loading it.
 
-    Storage is optional: analysis works without it, so a failure here is
-    reported rather than fatal.
+    ``MEDGEMMA_PATH`` is ~8.6 GB of vendor weights under Google's terms, so it is
+    gitignored and absent from every clone until someone downloads it — and it is
+    absent from any hosted deployment that builds from the repository. Checking
+    the directory rather than calling ``load()`` lets the AI Assistant say so up
+    front instead of failing on the first question.
     """
-    try:
-        store.connect()
-    except Exception as error:
-        return False, str(error)
+    if _truthy(os.environ.get("CARDIOVISION_SKIP_MEDGEMMA")):
+        return False, "disabled because CARDIOVISION_SKIP_MEDGEMMA is set"
 
-    return store.is_ready, store.connect_error
+    if medgemma.is_loaded:
+        return True, None
+
+    if not MEDGEMMA_PATH.is_dir() or not any(MEDGEMMA_PATH.iterdir()):
+        return False, "the weights are not present in this deployment"
+
+    return True, None
 
 
 # ============================================================
@@ -250,13 +259,14 @@ def case_state() -> dict[str, Any]:
     """
     The working case, in exactly the shape ``fusion`` and ``case_context`` read.
 
-    Held in session state so the AI Assistant, the report and Case Management
-    all see the analyses this browser session produced, without any of them
-    re-running a model.
+    Held in session state so the AI Assistant and the integrated report see the
+    analyses this browser session produced, without either of them re-running a
+    model. It is never written to disk: ``patient`` and ``clinical`` stay empty
+    here because collecting demographics belongs to the authenticated client, and
+    the evidence layer reports both as not provided rather than as normal.
     """
     if "case" not in st.session_state:
         st.session_state.case = {
-            "case_id": None,
             "patient": {},
             "clinical": {},
             "ccta": None,
@@ -418,9 +428,11 @@ def discover_samples() -> dict[str, list[dict[str, Any]]]:
 
 def run_analysis(modality: str, spinner: str, **kwargs: Any) -> Optional[dict[str, Any]]:
     """
-    Load the model if needed, run the shared analysis, store it on the case.
+    Load the model if needed, run the shared analysis, keep it in the session.
 
-    Returns ``None`` after reporting the failure, so the caller can simply stop.
+    No ``case_id`` is passed, so the core archives nothing: this client does not
+    write to the case store. Returns ``None`` after reporting the failure, so the
+    caller can simply stop.
     """
     functions = {
         "ccta": analyze_ccta,
@@ -766,24 +778,33 @@ def section_dashboard() -> None:
 
     st.markdown("### Runtime")
 
-    ready, store_error = open_store()
+    narrative_ready, narrative_reason = medgemma_state()
 
     left, right = st.columns(2)
     left.metric("Configured device", str(DEVICE).upper())
-    right.metric("Saved cases", store.count() if ready else "—")
+    right.metric("Report narrative", "available" if narrative_ready else "unavailable")
 
-    if not ready:
+    if not narrative_ready:
         st.info(
-            "The case database is not available, so nothing can be saved this "
-            f"session. Analysis still works. {store_error or ''}"
+            "The clinical language model is not available here — "
+            f"{narrative_reason}. Segmentation, classification, explainability "
+            "and the structured report are unaffected: the report layer is "
+            "deterministic and needs no language model. See **AI Assistant** for "
+            "how to enable narrative text locally."
         )
+
+    st.caption(
+        "Nothing is saved. Results live in this browser session only — patient "
+        "records and the case store belong to the authenticated React client."
+    )
 
     st.markdown("### What this interface does not do")
     st.markdown(
         "- no diagnosis, no stenosis grade, no calcium score, no CAD-RADS\n"
         "- no ejection fraction, strain or chamber volume over a cycle\n"
         "- no risk score — there is no risk model in this project\n"
-        "- no per-case confidence: every published metric is dataset-level"
+        "- no per-case confidence: every published metric is dataset-level\n"
+        "- no patient records, no database, no case lifecycle"
     )
 
 
@@ -830,7 +851,6 @@ def section_ccta() -> None:
             max_windows=int(max_windows),
             include_gradcam=include_gradcam,
             include_figures=include_figures,
-            case_id=case_state().get("case_id"),
         )
 
         if payload:
@@ -885,7 +905,6 @@ def section_echo() -> None:
             # The mask is a 65k-element array used for client-side rendering;
             # the figures here are already rendered server-side.
             include_mask=False,
-            case_id=case_state().get("case_id"),
         )
 
         if payload:
@@ -956,7 +975,6 @@ def section_ecg() -> None:
             target_class=(
                 None if target_class == "highest probability" else target_class
             ),
-            case_id=case_state().get("case_id"),
         )
 
         if payload:
@@ -967,6 +985,41 @@ def section_ecg() -> None:
         show_ecg_result(case_state()["ecg"])
 
 
+def _medgemma_notice(reason: Optional[str]) -> None:
+    """
+    Say plainly that the language model is absent, and what still works.
+
+    Two things this must not do: imply the analysis is degraded (it is not — no
+    number in this application comes from a language model), and hide the reason
+    behind a generic failure. The weights are the one dependency the repository
+    cannot ship.
+    """
+    st.warning(
+        f"The clinical language model is not available — {reason}. "
+        "No measurement depends on it: every number comes from one of the three "
+        "imaging models, and the integrated report below is deterministic and "
+        "complete without a narrative."
+    )
+
+    with st.expander("Enabling narrative text on a local machine"):
+        st.markdown(
+            "MedGemma is roughly 8.6 GB of vendor weights under Google's Health "
+            "AI Developer Foundations terms, so it is not redistributed with "
+            "this repository and is not present in a hosted deployment built "
+            "from it. To enable it locally, accept the terms and download the "
+            "weights into the path the configuration already expects:"
+        )
+        st.code(
+            "huggingface-cli download google/medgemma-1.5-4b-it \\\n"
+            f"  --local-dir {MEDGEMMA_PATH.name}",
+            language="bash",
+        )
+        st.caption(
+            f"Expected under models/{MEDGEMMA_PATH.name}/ — resolved from "
+            "config.py, so no path needs editing. Restart the app afterwards."
+        )
+
+
 def section_assistant() -> None:
     st.title("AI Assistant")
     st.caption(
@@ -974,6 +1027,11 @@ def section_assistant() -> None:
         "They are explanation, not measurement — every number in the context "
         "came from one of the three imaging models."
     )
+
+    narrative_ready, narrative_reason = medgemma_state()
+
+    if not narrative_ready:
+        _medgemma_notice(narrative_reason)
 
     case = case_state()
     context = build_case_context(case)
@@ -988,60 +1046,71 @@ def section_assistant() -> None:
     else:
         st.info(
             "No analysis is attached to this session yet, so questions are "
-            "answered from general medical knowledge with no case context."
+            "answered from general medical knowledge with no case context. "
+            "Run a sample case or upload a study first."
         )
 
-    history: list[dict[str, str]] = st.session_state.setdefault("chat", [])
+    if narrative_ready:
+        history: list[dict[str, str]] = st.session_state.setdefault("chat", [])
 
-    for message in history:
-        with st.chat_message(message["role"]):
-            st.markdown(message["text"])
+        for message in history:
+            with st.chat_message(message["role"]):
+                st.markdown(message["text"])
 
-    question = st.chat_input("Ask about this case, or about the models")
+        question = st.chat_input("Ask about this case, or about the models")
 
-    if question:
-        history.append({"role": "user", "text": question})
+        if question:
+            history.append({"role": "user", "text": question})
 
-        with st.chat_message("user"):
-            st.markdown(question)
+            with st.chat_message("user"):
+                st.markdown(question)
 
-        with st.spinner("Loading the language model…"):
-            model, error = load_model("medgemma")
+            with st.spinner("Loading the language model…"):
+                model, error = load_model("medgemma")
 
-        with st.chat_message("assistant"):
-            if model is None:
-                answer = error or "The language model is not available."
-                st.error(answer)
-            else:
-                try:
-                    with st.spinner("Generating…"):
-                        answer = model.generate(
-                            question=question, context=context
-                        )
-                    st.markdown(answer)
-                except Exception as failure:
-                    answer = f"Generation failed: {failure}"
+            with st.chat_message("assistant"):
+                if model is None:
+                    answer = error or "The language model is not available."
                     st.error(answer)
+                else:
+                    try:
+                        with st.spinner("Generating…"):
+                            answer = model.generate(
+                                question=question, context=context
+                            )
+                        st.markdown(answer)
+                    except Exception as failure:
+                        answer = f"Generation failed: {failure}"
+                        st.error(answer)
 
-        history.append({"role": "assistant", "text": answer})
+            history.append({"role": "assistant", "text": answer})
 
-    _report_panel(case)
+    _report_panel(case, narrative_ready)
 
 
-def _report_panel(case: dict[str, Any]) -> None:
+def _report_panel(case: dict[str, Any], narrative_ready: bool) -> None:
     """
     The structured report: deterministic evidence, with an optional narrative.
 
     The narrative is optional in the schema for a reason — every finding comes
     from a modality model, so the report stands complete without it and records
-    why it is missing.
+    why it is missing. When the weights are absent the checkbox is not offered at
+    all, and ``ai_summary_error`` carries the reason into the report itself.
     """
     st.divider()
     st.markdown("### Integrated report")
 
-    want_summary = st.checkbox(
-        "Include the language-model narrative", value=True
-    )
+    if narrative_ready:
+        want_summary = st.checkbox(
+            "Include the language-model narrative", value=True
+        )
+    else:
+        want_summary = False
+        st.caption(
+            "The structured report is built without a narrative here. Every "
+            "status, finding and uncertainty in it is computed deterministically "
+            "from the analyses in this session."
+        )
 
     if not st.button("Build report"):
         if st.session_state.get("report"):
@@ -1068,8 +1137,15 @@ def _report_panel(case: dict[str, Any]) -> None:
                     )
             except Exception as failure:
                 ai_error = str(failure)
-    else:
+    elif narrative_ready:
         ai_error = "The narrative was not requested."
+    else:
+        # The report records why, rather than leaving a reader to wonder whether
+        # generation was skipped or failed.
+        ai_error = (
+            "The clinical language model is not available in this deployment "
+            f"({medgemma_state()[1]}), so no narrative was generated."
+        )
 
     report = build_report(
         evidence=evidence,
@@ -1143,19 +1219,13 @@ def _show_report(report: dict[str, Any]) -> None:
     st.download_button(
         "Download report (JSON)",
         data=json.dumps(report, indent=2),
-        file_name=f"{report.get('case_id') or 'unsaved-case'}-report.json",
+        file_name=f"{report.get('case_id') or 'session'}-report.json",
         mime="application/json",
     )
-
-    case_id = case_state().get("case_id")
-    ready, _ = open_store()
-
-    if case_id and ready and st.button("Store this report with the case"):
-        try:
-            store.save_report(case_id, report)
-            st.success(f"Report stored against {case_id}.")
-        except Exception as error:
-            st.error(str(error))
+    st.caption(
+        "Downloading is the only way out of this interface — nothing is written "
+        "to disk on the server."
+    )
 
 
 def section_samples() -> None:
@@ -1246,7 +1316,6 @@ def _sample_ccta(cases: list[dict[str, Any]]) -> None:
             max_windows=int(budget),
             include_gradcam=True,
             include_figures=True,
-            case_id=case_state().get("case_id"),
         )
 
         if payload:
@@ -1293,7 +1362,6 @@ def _sample_echo(cases: list[dict[str, Any]]) -> None:
             rotate=0,
             flip=False,
             include_mask=False,
-            case_id=case_state().get("case_id"),
         )
 
         if payload:
@@ -1340,262 +1408,11 @@ def _sample_ecg(cases: list[dict[str, Any]]) -> None:
                 Path(path).name: read_sample(path)
                 for path in record["companions"]
             },
-            case_id=case_state().get("case_id"),
         )
 
         if payload:
             show_ecg_result(payload)
             _discuss_hint()
-
-
-def section_cases() -> None:
-    st.title("Case management")
-
-    ready, error = open_store()
-
-    if not ready:
-        st.error(
-            "The case database is not available, so cases cannot be saved or "
-            f"listed. {error or ''}"
-        )
-        return
-
-    case = case_state()
-
-    st.caption(
-        "The same SQLite store the API writes to. Records are local to this "
-        "machine and are not encrypted."
-    )
-
-    _case_form(case)
-
-    st.divider()
-    st.markdown("### Saved cases")
-
-    search = st.text_input("Search by name, MRN, case ID or notes")
-    records = store.list(search=search, limit=100)
-
-    if not records:
-        st.info("No saved case matches." if search else "No cases are saved yet.")
-        return
-
-    st.dataframe(
-        [
-            {
-                "Case": row.get("case_id"),
-                "Patient": row.get("patient_name") or "—",
-                "Study date": row.get("study_date") or "—",
-                "CCTA": "yes" if row.get("ccta_analyzed") else "no",
-                "Echo": "yes" if row.get("echo_analyzed") else "no",
-                "ECG": "yes" if row.get("ecg_analyzed") else "no",
-                "Report": "yes" if row.get("has_report") else "no",
-                "Updated": row.get("updated_at"),
-            }
-            for row in records
-        ],
-        hide_index=True,
-    )
-
-    _case_actions([row["case_id"] for row in records])
-
-
-def _case_form(case: dict[str, Any]) -> None:
-    """Demographics and clinical context for the working case."""
-    patient = case.setdefault("patient", {})
-    clinical = case.setdefault("clinical", {})
-
-    with st.form("case_form"):
-        st.markdown("### This session's case")
-
-        left, middle, right = st.columns(3)
-
-        patient["name"] = left.text_input("Patient name", patient.get("name", ""))
-        patient["mrn"] = middle.text_input("MRN", patient.get("mrn", ""))
-        patient["sex"] = right.selectbox(
-            "Sex",
-            ("", "female", "male", "other"),
-            index=("", "female", "male", "other").index(patient.get("sex") or ""),
-        )
-
-        left, middle, right = st.columns(3)
-
-        # Date of birth is stored; age is derived from it on every read, so a
-        # typed age can never go stale against it.
-        patient["dateOfBirth"] = left.text_input(
-            "Date of birth (YYYY-MM-DD)", patient.get("dateOfBirth", "")
-        )
-        patient["studyDate"] = middle.text_input(
-            "Study date (YYYY-MM-DD)", patient.get("studyDate", "")
-        )
-        patient["referringClinician"] = right.text_input(
-            "Referring clinician", patient.get("referringClinician", "")
-        )
-
-        left, right = st.columns(2)
-
-        clinical["bloodPressure"] = left.text_input(
-            "Blood pressure", clinical.get("bloodPressure", "")
-        )
-        clinical["heartRate"] = right.text_input(
-            "Heart rate (bpm)", str(clinical.get("heartRate") or "")
-        )
-
-        clinical["symptoms"] = st.text_area(
-            "Symptoms", clinical.get("symptoms", "")
-        )
-        patient["notes"] = st.text_area("Notes", patient.get("notes", ""))
-
-        st.caption(
-            "History is recorded as positives only. An unticked box means the "
-            "history was not taken — it is reported as unknown, never as denied."
-        )
-
-        risk_factors = (
-            ("diabetes", "Diabetes"),
-            ("hypertension", "Hypertension"),
-            ("smoking", "Smoking"),
-        )
-        columns = st.columns(len(risk_factors))
-
-        for index, (key, label) in enumerate(risk_factors):
-            clinical[key] = columns[index].checkbox(
-                label, value=bool(clinical.get(key)), key=f"clinical_{key}"
-            )
-
-        saved = st.form_submit_button("Save case", type="primary")
-
-    if saved:
-        _save_case(case)
-
-
-def _save_case(case: dict[str, Any]) -> None:
-    """
-    Persist the working case through the shared store.
-
-    The store lifts nested ``figures`` out of the CCTA and ECG payloads itself,
-    but it reads echo renders only from the top-level ``images`` key — so the
-    echo payload is split here, and its mask array is dropped rather than
-    written into a JSON column.
-    """
-    payload: dict[str, Any] = {
-        "case_id": case.get("case_id"),
-        "patient": case.get("patient") or {},
-        "clinical": case.get("clinical") or {},
-        "ccta": case.get("ccta"),
-        "ecg": case.get("ecg"),
-    }
-
-    echo = case.get("echo")
-
-    if echo:
-        echo_record = dict(echo)
-        payload["images"] = echo_record.pop("images", None) or {}
-        echo_record.pop("mask", None)
-        payload["echo"] = echo_record
-
-    try:
-        stored = store.save(payload)
-    except Exception as error:
-        st.error(f"The case could not be saved: {error}")
-        return
-
-    case["case_id"] = stored.get("case_id")
-    st.success(f"Saved as {case['case_id']}.")
-
-
-def _case_actions(case_ids: list[str]) -> None:
-    st.markdown("### Open or remove")
-
-    chosen = st.selectbox("Case", case_ids, key="case_pick")
-
-    left, right = st.columns(2)
-
-    if left.button("Open into this session"):
-        record = store.get(chosen)
-
-        if record is None:
-            st.error(f"Case {chosen} could not be read.")
-        else:
-            case = case_state()
-            case["case_id"] = record["case_id"]
-            case["patient"] = record.get("patient") or {}
-            case["clinical"] = record.get("clinical") or {}
-
-            for modality in ("ccta", "echo", "ecg"):
-                case[modality] = record.get(modality)
-                # A stored analysis means a file was provided; so does a stored
-                # filename with no analysis, which is why the flag is set from
-                # both rather than from the analysis alone.
-                case["modalities_provided"][modality] = bool(
-                    record.get(modality)
-                    or record.get(f"{modality}_analyzed")
-                )
-
-            st.session_state.pop("report", None)
-            st.success(f"Opened {chosen}.")
-            _show_stored_figures(record)
-
-    # Deletion removes the row and the case directory, and cannot be undone —
-    # so it takes a second, explicit confirmation.
-    confirm = right.checkbox(f"Confirm deletion of {chosen}")
-
-    if right.button("Delete case", disabled=not confirm):
-        try:
-            removed = store.delete(chosen)
-        except Exception as error:
-            st.error(str(error))
-            return
-
-        if removed:
-            st.success(f"Deleted {chosen}.")
-
-            if case_state().get("case_id") == chosen:
-                case_state()["case_id"] = None
-        else:
-            st.info(f"Case {chosen} was already gone.")
-
-
-def _show_stored_figures(record: dict[str, Any]) -> None:
-    """
-    Draw the figures a stored case kept on disk.
-
-    A hydrated case carries API endpoint paths rather than image bytes, because
-    the React client fetches them with its bearer token. This client has no HTTP
-    server to fetch from, so the file is read through the store instead — the
-    last path segment is the stored asset name.
-    """
-    stored: dict[str, str] = {}
-
-    for group in ("images", "ecg_figures", "ccta_figures"):
-        for short, url in (record.get(group) or {}).items():
-            stored[f"{group.replace('_figures', '')}: {short}"] = (
-                str(url).rsplit("/", 1)[-1]
-            )
-
-    if not stored:
-        st.caption("This case has no stored figures.")
-        return
-
-    with st.expander(f"Stored figures ({len(stored)})"):
-        label = st.selectbox("Figure", sorted(stored), key="stored_figure")
-        payload = store.read_image(record["case_id"], stored[label])
-
-        if payload is None:
-            st.caption("That figure is no longer on disk.")
-            return
-
-        if media_type_for(stored[label]) == "image/svg+xml":
-            st.markdown(
-                '<div style="background:#ffffff;padding:8px;border-radius:6px">'
-                + payload.decode("utf-8")
-                + "</div>",
-                unsafe_allow_html=True,
-            )
-        else:
-            try:
-                st.image(payload, caption=label, use_container_width=True)
-            except TypeError:                               # pragma: no cover
-                st.image(payload, caption=label)
 
 
 def section_about() -> None:
@@ -1616,8 +1433,7 @@ def section_about() -> None:
         "- **Electrocardiography** — 1-D residual CNN over the five PTB-XL "
         "diagnostic superclasses, with per-lead input-gradient attribution.\n"
         "- **Report layer** — deterministic aggregation of whatever was "
-        "analysed, with an optional language-model narrative.\n"
-        "- **Case store** — local SQLite, shared with the API."
+        "analysed, with an optional language-model narrative."
     )
 
     st.markdown("### What is not")
@@ -1625,7 +1441,11 @@ def section_about() -> None:
         "- no clinical risk model and no learned multimodal fusion — both are "
         "reported as unavailable rather than approximated\n"
         "- no regulatory clearance, no prospective evaluation, no reader study\n"
-        "- no diagnosis, and no per-case confidence figure"
+        "- no diagnosis, and no per-case confidence figure\n"
+        "- no sign-in, no patient records and no case store in this interface — "
+        "those belong to the authenticated React client, which is unchanged\n"
+        "- no language model unless its weights were downloaded separately; the "
+        "structured report does not depend on one"
     )
 
     st.divider()
@@ -1661,7 +1481,6 @@ _SECTIONS = {
     "ECG": section_ecg,
     "AI Assistant": section_assistant,
     "Sample Cases": section_samples,
-    "Case Management": section_cases,
     "About / Developer": section_about,
 }
 
@@ -1678,7 +1497,6 @@ def sidebar() -> str:
         case = case_state()
 
         st.markdown("**This session**")
-        st.caption(f"Case: {case.get('case_id') or 'unsaved'}")
 
         for key, label in (
             ("ccta", "CCTA"),
@@ -1691,6 +1509,8 @@ def sidebar() -> str:
                 st.caption(f"{label}: file provided, not analysed")
             else:
                 st.caption(f"{label}: no input")
+
+        st.caption("Not saved anywhere — this session only.")
 
         if st.button("Clear session"):
             # Only the working case and the transcript. The cached models stay

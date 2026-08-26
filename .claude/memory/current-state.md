@@ -65,12 +65,16 @@ and `streamlit_app.py` calls the same functions in-process. No medical logic is
 duplicated between the clients.
 
 **Streamlit client.** One file, `streamlit_app.py`, `pip install -e ".[streamlit]"`,
-eight sections (Dashboard, CCTA, Echocardiography, ECG, AI Assistant, Sample Cases,
-Case Management, About / Developer). No sign-in by requirement — a research and
-demonstration surface, not a second application. Models load lazily behind
-`st.cache_resource` and honour the same `CARDIOVISION_SKIP_*` flags. It writes to the
-same `data/cardiovision.db`, so it must not be exposed past localhost. The React
-client's authentication is untouched.
+seven sections (Dashboard, CCTA, Echocardiography, ECG, AI Assistant, Sample Cases,
+About / Developer). No sign-in by requirement — a research and demonstration
+surface, not a second application. Models load lazily behind `st.cache_resource`
+and honour the same `CARDIOVISION_SKIP_*` flags. **It persists nothing**: no
+`case_id` reaches `analyze_*`, `store.connect()` is never called, and results live
+in `st.session_state` only — case management, patient records and the SQLite store
+belong to the authenticated React client, which is untouched. MedGemma is
+optional; `medgemma_state()` checks the gitignored weights directory and the
+Dashboard and AI Assistant report its absence, with the deterministic report and
+every measurement unaffected.
 
 **Sample inputs.** `samples/` (`config.SAMPLES_DIR`) — two cases per modality from
 CAMUS, MedHK23/CCA and PTB-XL, 181 MB tracked. The Streamlit Sample Cases section

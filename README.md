@@ -316,18 +316,27 @@ streamlit run streamlit_app.py                # http://localhost:8501
 | Reaches the core | over HTTP, through the API | in-process, through `cardiovision.analysis` |
 | Sign-in | required on every route | none — it is a research and demonstration surface |
 | Needs the API running | yes | no |
-| Case store | the same `data/cardiovision.db` | the same `data/cardiovision.db` |
+| Case store | `data/cardiovision.db` | none — opens no database, writes nothing |
+| Patient records | created and stored | never collected |
+| Results persist | yes, in the case | session only, gone with the tab |
 | Models | the three checkpoints + MedGemma | the same objects, loaded on first use |
+| MedGemma | optional | optional — absence is reported, not fatal |
 
 Sections: Dashboard, CCTA, Echocardiography, ECG, AI Assistant, Sample Cases,
-Case Management, About / Developer. The sample cases run the same pipeline as an
-upload — no precomputed result is substituted — and the CAMUS `_gt` label maps are
-offered beside a prediction as the dataset's own reference, never as model output.
+About / Developer. The sample cases run the same pipeline as an upload — no
+precomputed result is substituted — and the CAMUS `_gt` label maps are offered
+beside a prediction as the dataset's own reference, never as model output.
 
 > [!NOTE]
 > Having no login does not weaken the API's authentication: this client never
-> calls the API. Do not expose it beyond localhost — it reads and writes the same
-> unencrypted patient database.
+> calls the API, and it has no case store to protect — case management, patient
+> records and the SQLite database belong to the authenticated React client.
+
+MedGemma is not required. Its weights are gitignored (~8.6 GB) and absent from
+every fresh clone, so the interface checks for them up front and says so instead
+of failing on the first question. Segmentation, classification, explainability
+and the integrated report are unaffected: the report layer is deterministic, and
+only `ai_summary` depends on a language model.
 
 ---
 

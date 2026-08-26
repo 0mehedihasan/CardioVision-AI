@@ -12,9 +12,14 @@ backend and a Vite dev server (or a static build of it). Nothing else.
 
 A third, optional process exists: `streamlit run streamlit_app.py` (:8501). It is
 not a deployment target — it imports the package and calls the shared core
-in-process, so it needs no uvicorn, and it reads and writes the same unencrypted
-`data/cardiovision.db`. It requires no sign-in **by requirement**, which is why it
-must not be exposed past localhost.
+in-process, so it needs no uvicorn. It **opens no database**: it passes no
+`case_id` to `analyze_*`, never calls `store.connect()`, and keeps every result in
+`st.session_state`, so nothing survives the browser tab. That is what makes it
+safe to run where the patient store must not exist, and it is the reason a
+sign-in requirement would buy nothing — there is no stored record to protect.
+MedGemma is optional there: the weights are gitignored, so the client checks for
+the directory up front and reports their absence rather than failing on the first
+question.
 
 There is no cloud infrastructure in this repository. Do not invent any, and do
 not document any that does not exist.
@@ -82,8 +87,9 @@ streamlit run streamlit_app.py    # :8501
 ```
 
 Same `config.py`, same `CARDIOVISION_*` environment variables, same
-`CARDIOVISION_SKIP_*` flags, same SQLite file. No `VITE_API_BASE_URL` equivalent
-exists because there is no HTTP hop to point at.
+`CARDIOVISION_SKIP_*` flags — but no SQLite file, no patient records and no case
+lifecycle; those belong to the authenticated React client. No
+`VITE_API_BASE_URL` equivalent exists because there is no HTTP hop to point at.
 
 ## Model loading at startup
 
