@@ -1839,6 +1839,31 @@
   border-left: 1px solid var(--line);
 }
 
+/* The attribution block stacks, so the vertical rule that separates the
+   inline footer items would read as a stray tick on each line. */
+.cv-footer-developer {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+
+  text-align: center;
+  line-height: 1.5;
+}
+
+.cv-footer-developer span {
+  padding-left: 0;
+  border-left: 0;
+}
+
+.cv-footer-developer a {
+  color: var(--muted);
+  text-decoration: underline;
+}
+
+.cv-footer-developer a:hover {
+  color: var(--accent);
+}
+
 /* ==================================================
    BANNERS
 
@@ -3006,6 +3031,13 @@
     padding-left: 0;
     border-left: 0;
   }
+
+  /* Left-aligned once the footer itself stacks, so the three blocks share
+     one edge instead of one being centred against the other two. */
+  .cv-footer-developer {
+    align-items: flex-start;
+    text-align: left;
+  }
 }
 /* ==================================================
    RESULTS CONTAINER
@@ -3577,6 +3609,36 @@
 
   font-family: var(--font-mono);
   font-size: 10px;
+}
+
+/* --------------------------------------------------
+   LOGIN CREDIT
+-------------------------------------------------- */
+
+.cv-login-credit {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+
+  padding-top: var(--sp-3);
+  border-top: 1px solid var(--line);
+
+  color: var(--soft);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.cv-login-credit strong {
+  color: var(--ink);
+}
+
+.cv-login-credit a {
+  color: var(--muted);
+  text-decoration: underline;
+}
+
+.cv-login-credit a:hover {
+  color: var(--accent);
 }
 
 /* --------------------------------------------------

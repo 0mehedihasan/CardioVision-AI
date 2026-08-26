@@ -25,7 +25,7 @@ is a signal to reconsider the design, not to add a layer.
 
 | Layer | May import | Must not |
 | --- | --- | --- |
-| `config` | stdlib only (torch **inside** `select_device()`) | import torch at module scope, import anything from the project |
+| `config` | stdlib, plus `from cardiovision import __version__` — the one project import, and `__init__.py` imports nothing so it cannot cycle (torch goes **inside** `select_device()`) | import torch at module scope, import any other project module |
 | `preprocessing` | numpy, format libraries, `config` | import `inference` |
 | `inference` | torch, numpy, `config`, `preprocessing` | render, or touch HTTP |
 | `rendering` | numpy, PIL, matplotlib, `config` | import torch |

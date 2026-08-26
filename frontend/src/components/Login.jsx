@@ -206,6 +206,26 @@ function Login({ health, healthError, onRetryHealth, onSignIn }) {
             </span>
           </div>
         )}
+
+        {/* The application footer carries the same attribution, but it is
+            behind this form — so one compact line here too, and nothing more. */}
+        <div className="cv-login-credit">
+          <span>
+            Developed by <strong>Md. Mehedi Hasan</strong> · Software Developer
+            &amp; AI Engineer
+          </span>
+
+          <span>
+            Department of Computer Science and Engineering, BUBT ·{" "}
+            <a
+              href="https://github.com/0mehedihasan/CardioVision-AI"
+              target="_blank"
+              rel="noreferrer noopener"
+            >
+              Repository
+            </a>
+          </span>
+        </div>
       </div>
     </div>
   );

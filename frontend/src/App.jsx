@@ -56,16 +56,21 @@ const modalityConfig = {
     label: "Echocardiography",
     short: "ECHO",
     description: "2D cardiac ultrasound",
-    formats: "DICOM, NIfTI, PNG, JPEG",
-    accept: ".png,.jpg,.jpeg,.dcm,.nii,.nii.gz",
+    formats: "DICOM, NIfTI (.nii/.nii.gz), PNG, JPEG",
+    // `.gz` is listed alongside `.nii.gz` on purpose. A file picker matches the
+    // filename's last extension, so a compound suffix is greyed out in some
+    // browsers and the operator cannot select `patient0001_4CH_ED.nii.gz` at
+    // all. The backend accepts `.gz` too and detects the real format from the
+    // magic bytes, so nothing is loosened by saying so here.
+    accept: ".png,.jpg,.jpeg,.dcm,.dicom,.nii,.nii.gz,.gz",
     analyzed: true,
   },
   ccta: {
     label: "Coronary CT angiography",
     short: "CCTA",
     description: "Cardiac CT / coronary anatomy",
-    formats: "DICOM, NIfTI, ZIP series",
-    accept: ".dcm,.nii,.nii.gz,.zip,.png,.jpg,.jpeg",
+    formats: "DICOM, NIfTI (.nii/.nii.gz), ZIP series",
+    accept: ".dcm,.dicom,.nii,.nii.gz,.gz,.zip,.png,.jpg,.jpeg",
     analyzed: true,
   },
   ecg: {
@@ -2332,6 +2337,41 @@ function CaseWorkspace({
           <strong>CardioVision AI</strong>
 
           <span>Multimodal cardiovascular imaging research platform</span>
+        </div>
+
+        {/* Attribution, not a second About page. The operator only ever needs
+            who wrote this and where the source is, so it lives in the footer
+            that is already on every screen. */}
+        <div className="cv-footer-developer">
+          <span>
+            Developed by <strong>Md. Mehedi Hasan</strong> · Software Developer
+            &amp; AI Engineer
+          </span>
+
+          <span>
+            Department of Computer Science and Engineering, Bangladesh
+            University of Business and Technology
+          </span>
+
+          <span>
+            <a
+              href="https://github.com/0mehedihasan"
+              target="_blank"
+              rel="noreferrer noopener"
+            >
+              GitHub
+            </a>
+
+            {" · "}
+
+            <a
+              href="https://github.com/0mehedihasan/CardioVision-AI"
+              target="_blank"
+              rel="noreferrer noopener"
+            >
+              Repository
+            </a>
+          </span>
         </div>
 
         <div>

@@ -23,22 +23,48 @@
 
 ## Contents
 
-- [What it does](#-what-it-does)
+- [About CardioVision AI](#-about-cardiovision-ai)
+- [Current capabilities](#-current-capabilities)
 - [Not for clinical use](#-not-for-clinical-use)
 - [Models](#-models)
 - [Quick start](#-quick-start)
 - [Configuration](#-configuration)
 - [API](#-api)
+- [Technology stack](#-technology-stack)
 - [Architecture](#-architecture)
 - [Testing](#-testing)
 - [Honesty constraints](#-honesty-constraints)
+- [Project status](#-project-status)
 - [Documentation](#-documentation)
 - [Citation](#-citation)
+- [Developer](#-developer)
 - [License](#-license)
 
 ---
 
-## 🫀 What it does
+## 🫀 About CardioVision AI
+
+CardioVision AI is a **research prototype**: a single-machine workstation that
+runs three trained cardiovascular models over three modalities and files the
+results as local case records.
+
+| | |
+| --- | --- |
+| **Purpose** | Read echo, CCTA and 12-lead ECG with trained models, then present the output with its uncertainty attached |
+| **Deployment** | Fully local — FastAPI backend, React frontend, SQLite case store, on-device language model |
+| **Data flow** | Nothing leaves the machine. No cloud inference, no telemetry, no external API call at runtime |
+| **Intended use** | Research, engineering and education. Every output is material for a qualified clinician to read |
+| **Not** | A diagnostic device, a clinically validated system, or a multi-user hospital deployment |
+
+Three properties are deliberate and are asserted by the test suite: a capability
+that does not exist is reported as unavailable rather than approximated; a
+structure below the presence threshold is reported as *not identified* rather
+than absent; and a weak metric travels with the number it qualifies, in the API,
+in the UI and in the language-model prompt.
+
+---
+
+## 🩻 Current capabilities
 
 | Capability | State | Where |
 | --- | --- | --- |
@@ -374,6 +400,32 @@ Full field-by-field reference: [`docs/api.md`](docs/api.md).
 
 ---
 
+## 🧰 Technology stack
+
+Every version below is a lower bound from [`pyproject.toml`](pyproject.toml) or
+[`frontend/package.json`](frontend/package.json), not a pin. Pinning torch in an
+application whose point is running on whatever accelerator the operator has is a
+portability bug, not a reproducibility feature.
+
+| Layer | Used |
+| --- | --- |
+| **Backend** | Python ≥ 3.10 · FastAPI ≥ 0.115 · Uvicorn ≥ 0.30 · Pydantic ≥ 2.7 |
+| **Deep learning** | PyTorch ≥ 2.3 · segmentation-models-pytorch ≥ 0.3.3 · timm ≥ 0.9.7 |
+| **Language model** | MedGemma 4B-IT via Transformers ≥ 4.45 · accelerate · safetensors · sentencepiece — loaded from disk, run locally |
+| **Medical I/O** | nibabel (NIfTI) · pydicom + pylibjpeg (DICOM, incl. compressed transfer syntaxes) · a WFDB reader written in-repo for PTB-XL |
+| **Numerics & rendering** | NumPy ≥ 1.26 · SciPy ≥ 1.11 · Pillow ≥ 10.3 · Matplotlib — all rendering is server-side PNG/SVG |
+| **Frontend** | React 19 · Vite 8 · plain CSS custom properties · oxlint — no UI framework, no component library, no state library |
+| **Storage** | SQLite through the stdlib `sqlite3`; rendered images on disk under `data/cases/` — no ORM |
+| **Weights** | Git LFS for the three served checkpoints; MedGemma downloaded separately and gitignored |
+| **Tests & CI** | 7 executable suites (761 checks) runnable without torch via `tests/torch_stub.py` · pytest wrapper · GitHub Actions on 3.10/3.11/3.12 · ruff |
+
+Deliberately absent: no Docker image, no ORM, no task queue, no logging
+framework, no dotenv loader, no cloud deployment target. The SciPy and nibabel
+paths keep explicit no-dependency branches so the pipeline degrades with a clear
+message instead of failing obscurely.
+
+---
+
 ## 🏗 Architecture
 
 ```
@@ -493,6 +545,52 @@ These are deliberate. Preserve them if you extend the project.
 
 ---
 
+## 📋 Project status
+
+**Active research prototype, version 4.0.0.** Implemented functionality is
+listed in [Current capabilities](#-current-capabilities) and is verified by the
+suites in [`tests/`](tests/). The table below is the honest boundary.
+
+### Implemented and serving
+
+| Area | Detail |
+| --- | --- |
+| Three trained models | Echo (UNet++/EfficientNet-B3), CCTA (Small3DUNet), ECG (1-D ResNet) — all loaded from checkpoints in `models/` |
+| Explainability | Input-gradient attribution for echo, Grad-CAM for CCTA and ECG lead attribution — real gradients, hidden entirely when unavailable |
+| Deterministic evidence layer | `fusion/` — structured cross-modal observations under a fixed status vocabulary, **no learned model** |
+| Local narrative reporting | MedGemma over real findings, with the prompt inspectable via `?include_prompt=true` |
+| Case management | Sign-in, SQLite records, rendered images on disk, MedGemma transcript per case |
+
+### Not implemented
+
+| Area | Status |
+| --- | --- |
+| Clinical risk scoring | **No model.** Fields are collected as context only; `MODALITY_STATUS["clinical"]` is `available: False` |
+| Learned multimodal fusion | **No model.** `notebooks/04_Multimodal_Fusion.ipynb` is empty; `fusion/` is deterministic software |
+| Training / fine-tuning code | Not in `src/`. The notebooks are the training *record*, not a build step |
+| Multi-user access, roles, audit log | One shared local operator account |
+| TLS, encryption at rest | Neither. Bind to localhost and keep the database off synced folders |
+| DICOM cine frame selection in the UI | `frame` exists on the API; the browser does not expose a picker yet |
+| Deployment tooling | No Dockerfile, no compose file, no cloud configuration |
+| External validation | None. No prospective study, no reader study, no demographic performance breakdown |
+
+### Known limitations in what *is* implemented
+
+- **CCTA was evaluated on three cases.** Dice 0.60, HD95 82–131 mm. Three
+  observations support no confidence interval; the mask is a contrast-density
+  highlight to review, not a verified coronary tree.
+- **ECG `HYP` is weak** — precision 0.361 at the 0.5 threshold, so roughly two in
+  three positive calls are wrong. It is never reported as a standalone finding.
+- **Echo reads one frame.** It outlines anatomy; it measures no function — no
+  ejection fraction, no strain, no volumes over a cycle.
+- **A case stores one analysis per modality.** Covering several echo views means
+  separate cases.
+- **Multimodal pairing is filing, not physiology.** An echo and an ECG in one
+  case are two studies an operator filed together; cross-modal observations carry
+  `inference: "none"` for exactly that reason.
+
+---
+
 ## 📚 Documentation
 
 | Document | Contents |
@@ -550,13 +648,22 @@ no DOI — citing this repository cites software, not a validated clinical resul
 
 ---
 
-## 👤 Author
+## 👤 Developer
 
 **Md. Mehedi Hasan**
-Advanced Machine Intelligence Research Lab (AMIR Lab)
-Department of Computer Science and Engineering
-Bangladesh University of Business and Technology (BUBT), Dhaka, Bangladesh
-GitHub: [@0mehedihasan](https://github.com/0mehedihasan)
+Software Developer & AI Engineer
+
+| | |
+| --- | --- |
+| **Affiliation** | Department of Computer Science and Engineering, Bangladesh University of Business and Technology (BUBT), Dhaka, Bangladesh |
+| **Research lab** | Advanced Machine Intelligence Research Lab (AMIR Lab) |
+| **Technical areas** | Machine Learning · Deep Learning · Explainable AI · Medical Imaging · Medical AI · Bioinformatics · Graph Neural Networks |
+| **GitHub** | [@0mehedihasan](https://github.com/0mehedihasan) |
+| **Repository** | [0mehedihasan/CardioVision-AI](https://github.com/0mehedihasan/CardioVision-AI) |
+
+CardioVision AI is developed and maintained as an independent research project.
+It has no institutional endorsement, no clinical partner and no regulatory
+status.
 
 ---
 
