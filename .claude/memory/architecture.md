@@ -7,13 +7,15 @@
 
 ```
 CardioVision-AI/
-├── src/cardiovision/     the application (installable package, 39 modules, 13 585 lines)
+├── src/cardiovision/     the application (installable package, 40 modules, 13 851 lines)
 ├── frontend/             Vite + React 19 single-page app
 ├── models/               weights and training artefacts (Git LFS)
 ├── notebooks/            the training record — NOT the application
 ├── tests/                executable verification suites
 ├── data/                 runtime case database + per-case files (gitignored)
-├── docs/                 EMPTY. CONTRIBUTING.md line 122 advertises it.
+├── samples/              two tracked sample inputs per modality (see rules/data-and-privacy)
+├── docs/                 api.md, architecture.md, models.md, verification.md
+├── streamlit_app.py       the second UI client — ONE file, by requirement
 ├── pyproject.toml         packaging, deps, ruff + pytest config
 └── requirements.txt       contains only `-e .` — deps live in pyproject
 ```
@@ -33,11 +35,18 @@ There is **one** backend. `backend/` no longer exists; anything referring to
 | `rendering/` | 1 394 | `ccta.py`, `echo.py`, `ecg.py`, `primitives.py` — server-side PNG/SVG |
 | `fusion/` | 1 969 | `evidence.py`, `report.py`, `schema.py` — deterministic aggregation |
 | `services/` | 2 266 | `auth.py`, `database.py`, `case_context.py` |
+| `analysis.py` | 665 | **The shared application core.** decode → forward pass → saliency → render → payload → archive, per modality, with no HTTP in it. `AnalysisError` carries the status code the API maps |
 | `api/` | 1 984 | `app.py`, `deps.py`, `schemas.py`, `routers/` (8 routers) |
 
 Import direction is one-way: `api` → `services`/`fusion`/`inference`/`rendering`
 → `preprocessing` → `config`. **`services/` never imports `api/`**, which is what
 lets `tests/test_case_lifecycle.py` run without FastAPI installed.
+
+`analysis.py` sits between them: above `preprocessing`/`inference`/`rendering`/
+`services`, below `api`. It must not import `api` and must not raise
+`HTTPException` — it is what lets `streamlit_app.py` run the identical pipeline
+in-process while the routers keep their status codes. Two UI clients, one
+implementation of each pipeline.
 
 `config.py` imports torch **only inside `select_device()`**, so the renderers,
 the case store, the context builder and the tests do not depend on the ML stack.

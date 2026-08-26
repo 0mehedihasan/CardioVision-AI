@@ -1,8 +1,9 @@
 # Current state
 
 A snapshot of what works, what is half-wired, what is untested and what does not
-exist. Written 2026-08-26 against the working tree, not against the README —
-**the README is out of date and contradicts this file; trust the code.**
+exist. Written 2026-08-26, updated 2026-08-27, against the working tree. The README
+has since been rewritten against the code, so the two should now agree — where they
+do not, **trust the code**.
 
 > **Notebook ≠ application.** `notebooks/` contains research pipelines that ran
 > once on Kaggle against absolute paths that do not exist on any other machine.
@@ -56,6 +57,26 @@ partial coverage named explicitly in the prompt.
 
 **Test suites.** 7 executable suites, **761 checks**, registered in
 `tests/test_all.py` and in CI.
+
+**Two UI clients, one core.** `src/cardiovision/analysis.py` holds one pipeline per
+modality — decode, forward pass, saliency, render, payload, archive — with no HTTP in
+it. The FastAPI routers are thin wrappers over it (`AnalysisError` → `as_http_error`),
+and `streamlit_app.py` calls the same functions in-process. No medical logic is
+duplicated between the clients.
+
+**Streamlit client.** One file, `streamlit_app.py`, `pip install -e ".[streamlit]"`,
+eight sections (Dashboard, CCTA, Echocardiography, ECG, AI Assistant, Sample Cases,
+Case Management, About / Developer). No sign-in by requirement — a research and
+demonstration surface, not a second application. Models load lazily behind
+`st.cache_resource` and honour the same `CARDIOVISION_SKIP_*` flags. It writes to the
+same `data/cardiovision.db`, so it must not be exposed past localhost. The React
+client's authentication is untouched.
+
+**Sample inputs.** `samples/` (`config.SAMPLES_DIR`) — two cases per modality from
+CAMUS, MedHK23/CCA and PTB-XL, 181 MB tracked. The Streamlit Sample Cases section
+runs them through the *same* `analyze_*` call as an upload; CAMUS `_gt` label maps
+are shown as dataset annotation, never as a model output. An illustration, not an
+evaluation set.
 
 **Frontend.** Login gate, patient form, case list, echo / ECG / CCTA result views,
 mask canvas, explainability view, case assistant and the integrated report.

@@ -89,6 +89,16 @@ CASE_DB_PATH = DATA_DIR / "cardiovision.db"
 
 CASE_FILES_DIR = DATA_DIR / "cases"
 
+# Tracked dataset samples — two cases per modality, documented in
+# samples/README.md. Deliberately outside DATA_DIR: everything under data/ is
+# runtime patient state and ignored by git, and a sample that lived there would
+# be a committed file inside CASE_FILES_DIR.
+#
+# Not guaranteed to exist: a clone without git-lfs, or a source distribution,
+# has the directory without the volumes. Callers check.
+
+SAMPLES_DIR = PROJECT_ROOT / "samples"
+
 
 # ============================================================
 # AUTHENTICATION

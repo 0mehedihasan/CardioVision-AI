@@ -10,6 +10,12 @@
 **Full local, single workstation.** Two processes on one machine: a uvicorn
 backend and a Vite dev server (or a static build of it). Nothing else.
 
+A third, optional process exists: `streamlit run streamlit_app.py` (:8501). It is
+not a deployment target — it imports the package and calls the shared core
+in-process, so it needs no uvicorn, and it reads and writes the same unencrypted
+`data/cardiovision.db`. It requires no sign-in **by requirement**, which is why it
+must not be exposed past localhost.
+
 There is no cloud infrastructure in this repository. Do not invent any, and do
 not document any that does not exist.
 
@@ -67,6 +73,17 @@ npm run build    # static build into frontend/dist/
 backend environment. There is no server in this repository that serves
 `frontend/dist/` — building it produces static files and nothing is configured to
 host them.
+
+### Streamlit client (optional)
+
+```bash
+pip install -e ".[streamlit]"
+streamlit run streamlit_app.py    # :8501
+```
+
+Same `config.py`, same `CARDIOVISION_*` environment variables, same
+`CARDIOVISION_SKIP_*` flags, same SQLite file. No `VITE_API_BASE_URL` equivalent
+exists because there is no HTTP hop to point at.
 
 ## Model loading at startup
 

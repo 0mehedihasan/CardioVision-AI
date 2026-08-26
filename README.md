@@ -301,6 +301,34 @@ See [`samples/README.md`](samples/README.md) for what each one is, its licence,
 and which split it came from. Two of them are dataset test cases, which makes a
 run on them a reproduction rather than an independent evaluation.
 
+### 6. Streamlit interface (optional)
+
+A second UI client over the same application core — one file,
+[`streamlit_app.py`](streamlit_app.py), no medical logic of its own.
+
+```bash
+pip install -e ".[streamlit]"
+streamlit run streamlit_app.py                # http://localhost:8501
+```
+
+| | React client | Streamlit client |
+| --- | --- | --- |
+| Reaches the core | over HTTP, through the API | in-process, through `cardiovision.analysis` |
+| Sign-in | required on every route | none — it is a research and demonstration surface |
+| Needs the API running | yes | no |
+| Case store | the same `data/cardiovision.db` | the same `data/cardiovision.db` |
+| Models | the three checkpoints + MedGemma | the same objects, loaded on first use |
+
+Sections: Dashboard, CCTA, Echocardiography, ECG, AI Assistant, Sample Cases,
+Case Management, About / Developer. The sample cases run the same pipeline as an
+upload — no precomputed result is substituted — and the CAMUS `_gt` label maps are
+offered beside a prediction as the dataset's own reference, never as model output.
+
+> [!NOTE]
+> Having no login does not weaken the API's authentication: this client never
+> calls the API. Do not expose it beyond localhost — it reads and writes the same
+> unencrypted patient database.
+
 ---
 
 ## 🔧 Configuration
@@ -415,6 +443,7 @@ portability bug, not a reproducibility feature.
 | **Medical I/O** | nibabel (NIfTI) · pydicom + pylibjpeg (DICOM, incl. compressed transfer syntaxes) · a WFDB reader written in-repo for PTB-XL |
 | **Numerics & rendering** | NumPy ≥ 1.26 · SciPy ≥ 1.11 · Pillow ≥ 10.3 · Matplotlib — all rendering is server-side PNG/SVG |
 | **Frontend** | React 19 · Vite 8 · plain CSS custom properties · oxlint — no UI framework, no component library, no state library |
+| **Second UI client** | Streamlit ≥ 1.36, optional (`pip install -e ".[streamlit]"`) — one file, calling the same core in-process |
 | **Storage** | SQLite through the stdlib `sqlite3`; rendered images on disk under `data/cases/` — no ORM |
 | **Weights** | Git LFS for the three served checkpoints; MedGemma downloaded separately and gitignored |
 | **Tests & CI** | 7 executable suites (761 checks) runnable without torch via `tests/torch_stub.py` · pytest wrapper · GitHub Actions on 3.10/3.11/3.12 · ruff |
@@ -438,7 +467,9 @@ CardioVision-AI/
 │   ├── rendering/           server-side PNG/SVG            (echo, ccta, ecg, primitives)
 │   ├── fusion/              deterministic evidence + report schema and prompt
 │   ├── services/            auth, SQLite case store, prompt context
+│   ├── analysis.py          shared core: decode -> model -> render -> payload
 │   └── api/                 FastAPI app, deps, schemas, 8 routers
+├── streamlit_app.py         second UI client (optional), calls analysis.py directly
 ├── frontend/src/            React 19 + Vite; App.jsx, api.js, 9 components
 ├── notebooks/               01 CCTA · 02 Echo · 03 ECG · 04 Fusion (fusion is empty)
 ├── models/                  checkpoints (Git LFS) + training artefacts per modality
@@ -453,6 +484,13 @@ inference, **rendering** never imports torch, **fusion** never imports a model,
 and **config** never imports torch at module scope — which is why the renderers,
 the case store and the whole test suite run on a machine where torch was never
 installed.
+
+`analysis.py` is the seam that makes two UI clients possible: it owns the whole
+decode → forward pass → saliency → render → payload sequence and knows nothing
+about HTTP, raising an `AnalysisError` that carries the status code the API maps
+onto a response. The routers validate, read the upload and dispatch; Streamlit
+calls the same functions with bytes read off disk. Neither client contains
+medical logic, and there is exactly one implementation of each pipeline.
 
 ### The evidence layer has no model
 

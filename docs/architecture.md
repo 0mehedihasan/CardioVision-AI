@@ -23,15 +23,24 @@ inference/         load checkpoint, forward pass, saliency →  findings + metri
 fusion/            three analyse responses → structured evidence → report
       │
       ▼
-api/               FastAPI routers; HTTP, auth, validation, serialisation
-      │
-      ▼
+analysis.py        one pipeline per modality: decode → forward → saliency →
+      │            render → response payload → archive.  No HTTP in it.
+      ├────────────────────────────────┐
+      ▼                                ▼
+api/               FastAPI routers     streamlit_app.py   in-process client
+      │            HTTP, auth,                            (one file)
+      ▼            serialisation
 frontend/src/      React 19 + Vite
 ```
 
 `services/` sits beside these rather than inside them: auth, the SQLite case
 store, and prompt-context construction are used by the routers, not by the model
 code.
+
+`analysis.py` is the seam that makes two UI clients possible without two
+implementations. Both clients call the same functions and get the same payload;
+`AnalysisError` carries the status code, so the API keeps its 413/415/422/503
+distinctions while a client that speaks no HTTP still gets the message.
 
 `config.py` is underneath everything and imports nothing from the project.
 
@@ -47,6 +56,8 @@ unrunnable on a machine without torch, which is most machines.
 | `rendering/` must not import torch | renderers take arrays. They are checked against real `.npy` artefacts in `models/`, with no forward pass |
 | `fusion/` must not import a model | there is no fusion model. `fusion/` reads finished analyse responses; the only model it touches is MedGemma, and only for narrative text over evidence already computed |
 | `api/` must not compute | routers validate, dispatch, serialise and handle errors. Arithmetic in a router is arithmetic no suite can reach |
+| `analysis.py` must not import `api/` or raise `HTTPException` | it is the shared core. The moment it knows what a request is, the Streamlit client needs a FastAPI install to run a forward pass |
+| A UI client must not reimplement a pipeline | `frontend/` and `streamlit_app.py` format and display. Duplicated medical serialisation is how two clients start disagreeing about the same case |
 | Nothing may hardcode an absolute path | `PROJECT_ROOT` walks up from the installed package looking for `pyproject.toml` or `models/`; `CARDIOVISION_HOME` overrides it |
 
 ---
@@ -74,6 +85,7 @@ unrunnable on a machine without torch, which is most machines.
 | `services/auth.py` | fixed operator account, salted hash, constant-time compare, in-memory sessions, lockout |
 | `services/database.py` | SQLite case store, migrations, denormalised list columns, image files |
 | `services/case_context.py` | the text block handed to MedGemma; withholds name and MRN |
+| `analysis.py` | `analyze_echo` / `analyze_ccta` / `analyze_ecg` and the `ensure_*_model` gates — the shared core both UI clients call |
 | `api/app.py` | app construction, CORS, lifespan model loading |
 | `api/deps.py` | `require_session` and shared dependencies |
 | `api/schemas.py` | request/response models |
@@ -100,6 +112,11 @@ POST /api/analyze/{echo|ccta|ecg}
 
 Timing is measured inside the lock so a request that queued behind another does
 not report its waiting time as compute time.
+
+Steps 1 and 2 are the router's; steps 3 to 9 are `analysis.py::analyze_<name>`.
+`streamlit_app.py` enters at step 3 with bytes it read from disk, which is why an
+uploaded case and a sample case produce the same payload rather than two
+lookalikes.
 
 ### A report
 
@@ -145,15 +162,20 @@ In order, because each step depends on the last:
 4. **`rendering/<name>.py`** — arrays to PNG, reusing `primitives.py`.
 5. **`fusion/evidence.py`** — a `_<name>_evidence` function, plus the modality in
    `EVIDENCE_MODALITIES`. Decide explicitly which keys gate `analysed`.
-6. **`api/routers/<name>.py`** — `GET /api/models/<name>` and
-   `POST /api/analyze/<name>`; register in `app.py`.
-7. **`services/database.py`** — a migration adding the columns, plus the
+6. **`analysis.py`** — an `analyze_<name>` assembling the response payload and an
+   `ensure_<name>_model` gate. This is the only place the pipeline exists.
+7. **`api/routers/<name>.py`** — `GET /api/models/<name>` and
+   `POST /api/analyze/<name>`, both thin: read the upload, call `analyze_<name>`,
+   map `AnalysisError` through `as_http_error`. Register in `app.py`.
+8. **`services/database.py`** — a migration adding the columns, plus the
    denormalised list columns. Move all columns for a modality together or not at
    all.
-8. **`tests/test_<name>_*.py`** — arithmetic and geometry that runs without
+9. **`tests/test_<name>_*.py`** — arithmetic and geometry that runs without
    torch, registered in `tests/test_all.py` and as a CI step.
-9. **`frontend/src/components/<Name>Result.jsx`** — and read
+10. **`frontend/src/components/<Name>Result.jsx`** — and read
    `MODALITY_STATUS` through `/api/health` rather than assuming availability.
+11. **`streamlit_app.py`** — a section calling the same `analyze_<name>`. Display
+   only; if you find yourself computing there, step 6 is incomplete.
 
 Do not skip step 1. Constants discovered later end up duplicated in two files
 with different values, which is how a threshold silently changes.

@@ -74,6 +74,13 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# The Streamlit client (streamlit_app.py). Optional because the React frontend
+# and the API do not need it, and it is the only dependency in the project that
+# a headless deployment can safely do without.
+streamlit = [
+    "streamlit>=1.36",
+]
+
 # Everything needed to run the test suites and lint the tree.
 dev = [
     "pytest>=8.0",

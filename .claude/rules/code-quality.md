@@ -15,8 +15,14 @@ src/cardiovision/
   rendering/        arrays -> PNG / SVG bytes
   fusion/           deterministic evidence + report schema and prompt
   services/         auth, SQLite case store, prompt context
+  analysis.py       the shared core: one pipeline per modality, no HTTP
   api/              app, deps, schemas, routers/
 ```
+
+There are two UI clients — `frontend/` over HTTP and `streamlit_app.py`
+in-process — and exactly one implementation of each pipeline, in `analysis.py`.
+A client may format and display; it may not compute. The Streamlit client is
+**one file by requirement**: no `streamlit/` package, no second config module.
 
 Put a new file in the layer that matches its job. If it does not fit a layer, that
 is a signal to reconsider the design, not to add a layer.
@@ -31,6 +37,7 @@ is a signal to reconsider the design, not to add a layer.
 | `rendering` | numpy, PIL, matplotlib, `config` | import torch |
 | `fusion` | `config`, `inference.medgemma` (narrative only) | import a segmentation or classification model |
 | `services` | stdlib, sqlite3, `config` | import a model |
+| `analysis` | `config`, `preprocessing`, `inference`, `rendering`, `services` | import `api`, raise `HTTPException`, or know what a request is |
 | `api` | everything above | contain arithmetic |
 
 Arithmetic in a router is arithmetic no test suite can reach. Move it down a layer
@@ -47,6 +54,7 @@ Before writing a helper, check whether one exists:
 | an upload read with a size limit | the shared `read_upload` used by the routers |
 | session enforcement on a route | `api/deps.py::require_session` |
 | the text block given to MedGemma | `services/case_context.py` |
+| a full modality pipeline, from bytes to response payload | `analysis.py::analyze_{echo,ccta,ecg}` — a router or a UI client calls it, never reimplements it |
 | a status string for a modality | `fusion/schema.py` — the vocabulary is fixed |
 
 Duplicating a constant is how a threshold silently changes in one place and not

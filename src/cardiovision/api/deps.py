@@ -3,7 +3,9 @@ Shared FastAPI dependencies.
 
 Three things every router needs and none of them owns: proving there is a
 session, reading an upload without letting it exhaust memory, and refusing
-politely when the case database is down.
+politely when the case database is down. Plus one translation: turning an
+:class:`~cardiovision.analysis.AnalysisError` raised by the shared analysis core
+into the HTTP status it was labelled with.
 
 Extracted so the auth rule is written once. A second copy of ``require_session``
 is how one endpoint ends up quietly unauthenticated.
@@ -15,16 +17,37 @@ from typing import Optional
 
 from fastapi import Header, HTTPException, UploadFile
 
+from cardiovision.analysis import AnalysisError
 from cardiovision.config import MAX_UPLOAD_BYTES
 from cardiovision.services import auth as auth_service
 from cardiovision.services.database import store
 
 __all__ = [
+    "as_http_error",
     "bearer_token",
     "require_session",
     "require_store",
     "read_upload",
 ]
+
+
+# ============================================================
+# ERRORS
+# ============================================================
+
+
+def as_http_error(error: AnalysisError) -> HTTPException:
+    """
+    Map an analysis failure onto the status it already carries.
+
+    The analysis core is imported by Streamlit as well as by FastAPI, so it
+    cannot raise ``HTTPException`` itself. It labels the failure instead, and
+    this is the one place that label becomes a response — so 415 for an
+    unsupported format and 503 for an unloaded model stay exactly what they were
+    when the payload builders lived in the routers.
+    """
+    return HTTPException(status_code=error.status_code, detail=str(error))
+
 
 
 # ============================================================
