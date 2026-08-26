@@ -1,3 +1,16 @@
+# ==================================================
+# Git LFS
+#
+# The two trained checkpoints are tracked here rather than ignored, because a
+# clone without them installs cleanly and then cannot load a model. Clone with
+# git-lfs installed, or the .pt/.pth files arrive as ~130-byte pointer text
+# and the loader reports a corrupt checkpoint.
+#
+#     git lfs install && git clone <url>
+#     git lfs pull          # in an existing clone
+#
+# MedGemma is deliberately NOT here — see .gitignore.
+# ==================================================
 *.pth filter=lfs diff=lfs merge=lfs -text
 *.pt filter=lfs diff=lfs merge=lfs -text
 *.ckpt filter=lfs diff=lfs merge=lfs -text
@@ -5,3 +18,13 @@
 *.joblib filter=lfs diff=lfs merge=lfs -text
 *.safetensors filter=lfs diff=lfs merge=lfs -text
 *.bin filter=lfs diff=lfs merge=lfs -text
+# ==================================================
+# GitHub language stats
+#
+# The notebooks are the training record, not the application, and they are big
+# enough to make this look like a notebook project rather than a Python one.
+# ==================================================
+notebooks/*.ipynb linguist-documentation
+frontend/dist/** linguist-generated
+models/ccta/*.pt filter=lfs diff=lfs merge=lfs -text
+models/ccta/*.pth filter=lfs diff=lfs merge=lfs -text
