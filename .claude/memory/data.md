@@ -1,8 +1,10 @@
 # Data
 
 Every dataset named here is one this repository can point at a real source for.
-There are no others. Three datasets were used for training; **none of them ship
-in this repository**, and no patient image, recording or volume is committed.
+There are no others. Three datasets were used for training. **No training or
+validation split ships here and no patient data is committed** — what does ship
+is two sample cases per modality under `samples/`, tracked on purpose so the
+upload paths can be exercised (§4).
 
 ---
 
@@ -149,12 +151,52 @@ cannot name a specific rhythm or infarct territory. No external validation.
 
 ## 4. What data actually lives in this repository
 
+`data/` is runtime state only. Sample inputs live in `samples/` and are tracked
+on purpose — see below.
+
 | Path | State |
 |---|---|
-| `data/.gitignore` | The only tracked file under `data/` |
-| `data/cardiovision.db`, `-wal`, `-shm` | Runtime SQLite case store — **gitignored**, contains patient data, unencrypted |
-| `data/cases/` | Empty directory. Gitignored. Holds saved renders at runtime. |
-| `data/sample/` | Empty directory. Not tracked (git does not track empty directories). |
+| `data/.gitignore` | Tracked, and the **only** tracked file under `data/` (`git ls-files data/`) |
+| `data/cardiovision.db`, `-wal`, `-shm` | Runtime SQLite case store — gitignored, contains patient data, unencrypted |
+| `data/cases/` | `CASE_FILES_DIR`: where the store writes each case's renders and source upload at runtime. Gitignored (`cases/`). Absent in a fresh clone; the store creates it |
+| `data/sample/` | Does not exist, despite the `!data/sample/` negation in the root `.gitignore` |
+| `samples/` | **Tracked dataset samples**, 181 MB, 38 files — see the table below |
+
+### Sample inputs — `samples/`
+
+Two cases per modality, taken from the training datasets, so every upload path can
+be exercised without fetching anything. Documented in `samples/README.md`.
+
+| Path | Dataset | Files | Size |
+|---|---|---|---|
+| `samples/ccta/CCTA_CASE_01{4,5}/{ccta_image,ground_truth}.nii.gz` | MedHK23/CCA | 4 | 165 MB (97 MB + 70 MB images) |
+| `samples/echo/patient000{1,2}/` | CAMUS | 30 | 16 MB, gzipped from 189 MB |
+| `samples/ecg/HR0000{1,2}.{hea,mat}` | PTB-XL | 4 | 248 KB |
+
+Four facts about them that matter:
+
+1. **They used to live in `data/cases/`** — committed there before the `cases/`
+   ignore rule existed, i.e. inside `CASE_FILES_DIR`, the directory the store writes
+   real patient files into. Moved out with `git mv`, so history is intact.
+2. **They are tracked deliberately.** The developer's decision, recorded here so it is
+   not re-litigated as a mistake. `LICENSE` must therefore not claim MedHK23/CCA is
+   undistributed, and PTB-XL's attribution requirement applies to the repository.
+3. **The CAMUS frames were gzipped** (`.nii` → `.nii.gz`) to get 189 MB down to 16 MB.
+   Both suffixes are in `ALLOWED_ECHO_SUFFIXES`, so nothing else changed.
+4. **The ECG pair is the packaging the model was trained from** — `.hea` + `.mat`,
+   format `16+24`. See `.claude/memory/models.md` and `tests/test_ecg_pipeline.py` §17.
+
+**Which split each sample came from**, because it decides what a run on it can be
+claimed to show:
+
+| Sample | Split | Consequence |
+|---|---|---|
+| `CCTA_CASE_014`, `CCTA_CASE_015` | **test** (`models/ccta/cardiovision_cca_split.csv`: test = 9, 14, 15) | never trained on — but two of the same three cases the published Dice and the 0.60 threshold came from, so a run here is a reproduction, not an independent evaluation |
+| `HR00001`, `HR00002` | **Not established in repository** — the per-record split lives in the notebook's `*_metadata.csv`, which is not shipped | do not claim these are held out |
+| `patient0001`, `patient0002` | **Not established in repository** | do not claim these are held out |
+
+They are dataset samples, **not** results and **not** an evaluation set. A comparison
+against the shipped `_gt` files on two cases is an anecdote.
 
 `data/.gitignore` carries its own warning: *"Patient data. Never commit this,
 and do not sync it to cloud storage — the database is not encrypted."* Take it
@@ -178,10 +220,15 @@ source image or recording is present.
 
 ## 5. Test data
 
-**There is no held-out data in this repository, and the test suites do not need
-any.** They build synthetic arrays and drive the models through
-`tests/torch_stub.py` when torch is absent. That is deliberate: it keeps the
-suite runnable on a clean clone with no downloads and no patient data.
+**No verification suite reads any real data, and none needs to.** They build
+synthetic arrays and drive the models through `tests/torch_stub.py` when torch is
+absent. That is deliberate: it keeps the suite runnable on a clean clone with no
+downloads and no patient data.
+
+`samples/` is for the manual acceptance pass, not for the suites — do not point a
+test at it. Two of its files (`CCTA_CASE_01{4,5}`) *are* dataset test cases, which
+makes them useful for a sanity check and useless as an independent metric: the
+published CCTA numbers and threshold were measured on them.
 
 To create *real* test cases, re-fetch from the pinned sources above and take
 only the rows the split files assign to `test`. Do not sample from train or

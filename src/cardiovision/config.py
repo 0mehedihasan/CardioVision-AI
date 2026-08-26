@@ -626,13 +626,17 @@ ALLOWED_ECHO_SUFFIXES = {
     ".dcm", ".dicom",
 }
 
-# WFDB is PTB-XL's native format and needs two files, so .hea and .dat are both
-# accepted and the loader pairs them — or a .zip holding both, which is the only
-# way to send a WFDB record through a single file input. .npy is what the
-# training notebook cached its preprocessed arrays as, which makes it the format
-# to use when checking this pipeline against known-good input.
+# WFDB is PTB-XL's native format and needs two files, so the header and its
+# signal file are both accepted and the loader pairs them — or a .zip holding
+# both, which is the only way to send a WFDB record through a single file input.
+# The signal file is .dat in the PhysioNet release and .mat in the Challenge
+# repackaging (with a byte offset declared in the header), so both suffixes are
+# listed; neither is readable on its own, and uploading one alone says so.
+# .npy is what the training notebook cached its preprocessed arrays as, which
+# makes it the format to use when checking this pipeline against known-good
+# input.
 ALLOWED_ECG_SUFFIXES = {
-    ".hea", ".dat",
+    ".hea", ".dat", ".mat",
     ".csv", ".txt", ".tsv",
     ".npy",
     ".json",

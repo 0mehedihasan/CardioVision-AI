@@ -54,38 +54,38 @@ loaded.
 MedGemma narrative constrained by the evidence, with unavailable modalities and
 partial coverage named explicitly in the prompt.
 
-**Test suites.** 5 executable suites, **502 checks**, registered in
+**Test suites.** 7 executable suites, **761 checks**, registered in
 `tests/test_all.py` and in CI.
 
-**Frontend.** Login gate, patient form, case list, echo view, ECG clinical view,
-mask canvas, explainability view, case assistant. 12 files, ~10 100 lines.
+**Frontend.** Login gate, patient form, case list, echo / ECG / CCTA result views,
+mask canvas, explainability view, case assistant and the integrated report.
+`App.jsx` (3 125 lines) + `api.js` (700) + nine components in
+`frontend/src/components/` (3 548).
 
 ---
 
 ## IN PROGRESS
 
-**The CCTA frontend has not caught up with the CCTA backend.** This is the single
-largest inconsistency in the repository right now.
+Nothing is half-wired. The CCTA gap recorded here earlier — backend done, frontend
+still rendering `<PendingModel>` and a hardcoded "No model" metric — is closed:
+`api.js` exports `analyzeCcta`, `integratedEvidence` and `generateReport`, and
+`navItems` has five sections ending in **Integrated report**.
 
-| Layer | State |
+`<PendingModel>` survives in exactly one place, `App.jsx:2978`, for the clinical-risk
+form — which genuinely has no model. That is the component doing its job.
+
+All seven suites pass (761 checks). The `test_case_lifecycle.py` failure recorded
+here earlier — the assertion `"Coronary CT angiography: not available" in ecg_text`,
+which encoded the pre-CCTA world — was fixed by correcting the assertion, not by
+weakening it.
+
+Still open, and small:
+
+| Item | Why it is still open |
 |---|---|
-| `inference/ccta.py`, `/api/analyze/ccta`, `/api/models/ccta` | Done |
-| `frontend/src/api.js` | **No `analyzeCcta`.** Also no `integratedEvidence`, no `generateReport`. |
-| `frontend/src/App.jsx` line ~1617 | CCTA tab renders `<PendingModel>` with the note *"There is no trained CCTA model yet, so nothing is inferred from CT data."* — **false** |
-| `frontend/src/App.jsx` line ~1219 | `{ label: "CCTA", active: false, unavailable: true }` — hardcoded |
-| `frontend/src/App.jsx` line ~2346 | `<Metric label="CCTA" value="No model" />` — hardcoded |
-| `navItems` | 4 sections. There is no integrated-report section for `/api/report`. |
-
-So `/api/evidence` and `/api/report` are implemented and **unreachable from the
-UI**. A user cannot currently produce a CCTA reading or an integrated report
-without calling the API directly.
-
-**One test is failing, honestly.** `tests/test_case_lifecycle.py` — 203 of 204
-checks pass; the failure is the check named *"but the untrained modalities still
-are"*, which asserts `"Coronary CT angiography: not available" in ecg_text`. That
-assertion encoded the old world in which CCTA had no model. It is now wrong.
-**Fix the assertion to match the new truth; do not weaken the test and do not
-delete the check.**
+| Echo 256×256 resize note | The echo preprocessing squares a non-square frame, so a reported area inherits an anisotropic distortion that is not surfaced in the response |
+| DICOM cine frame selector | `frame` exists on the API; the UI does not expose a picker, so a multi-frame loop always reads frame 0 from the browser |
+| `cardiovision check` in the README quick start | The command exists and is the fastest way to see what loaded; the quick start does not mention it |
 
 ---
 
@@ -107,8 +107,10 @@ established from source; **runtime behaviour is not.**
 
 | Suite | Checks | Result | What was stubbed |
 |---|---|---|---|
-| `test_case_lifecycle.py` | 204 | **203 pass, 1 fail** | — |
-| `test_ecg_pipeline.py` | 100 | pass | SciPy absent → `bandpass_filter` and `resample_ecg` ran against numpy stand-ins, so **the filter arithmetic itself is uncovered** |
+| `test_case_lifecycle.py` | 207 | pass | nothing — a real temporary SQLite file |
+| `test_report_evidence.py` | 134 | pass | torch absent; the modality results fed in were fixtures, not model output |
+| `test_ccta_pipeline.py` | 108 | pass | SciPy and nibabel absent → the **no-SciPy** resample branch ran; the masks fed in were synthetic |
+| `test_ecg_pipeline.py` | 114 | pass | SciPy absent → `bandpass_filter` and `resample_ecg` ran against numpy stand-ins, so **the filter arithmetic itself is uncovered** |
 | `test_ecg_rendering.py` | 100 | pass | nothing — figures were generated and parsed for real |
 | `test_ecg_reporting.py` | 53 | pass | torch absent; probabilities fed in were synthetic |
 | `test_ecg_architecture.py` | 45 | pass | torch absent → `nn` stub; names, shapes and parameter count real, no forward pass |
@@ -142,8 +144,6 @@ describe it as a fusion model.
 
 - No training code in `src/` — the package serves models, it does not fit them
 - No multimodal dataset, and no patient shared across the three cohorts
-- No `docs/` content (the directory is empty, though `CONTRIBUTING.md` line 122
-  advertises it)
 - No deployment tooling: no Dockerfile, no compose file, no cloud config
 - No user management, roles or audit log — one shared account
 - No TLS, and no encryption at rest for the case database
@@ -152,33 +152,38 @@ describe it as a fusion model.
 
 ---
 
-## Known-stale documentation
+## Documentation state
 
-These files still describe an earlier state of the project. They are listed so
-nobody treats them as authoritative, **not** as a to-do that this context file
-authorises fixing.
+`README.md` and `docs/` were rewritten against the code as it stands: `docs/architecture.md`
+(layers and dependency rules), `docs/models.md` (every metric, copied from `config.py`),
+`docs/api.md` (routes, parameters, status codes) and `docs/verification.md` (what the
+761 checks prove and what they do not). Attribution was applied across `pyproject.toml`,
+`LICENSE`, `CITATION.cff`, the issue templates and `frontend/package.json` (with
+`package-lock.json` kept in sync so `npm ci` still resolves).
 
-| File | Stale claim |
+Two things to keep in mind rather than trust:
+
+| Risk | Note |
 |---|---|
-| `README.md` | One trained model; "ECG \| No pipeline exists"; "CCTA \| Not trained"; references `backend/config.py` and `uvicorn main:app`, neither of which exists |
-| `src/cardiovision/__init__.py` | Docstring: "Two models are trained and serving", CCTA untrained |
-| `pyproject.toml` | Description omits CCTA; no `authors`; `urls` point at `github.com/mehedi/...` |
-| `.github/ISSUE_TEMPLATE/config.yml` | Two `github.com/mehedi/...` URLs |
-| `.github/ISSUE_TEMPLATE/feature_request.yml` | "Three of the four notebooks" |
-| `LICENSE` | "Copyright (c) 2026 CardioVision AI contributors" — no named author |
-| `frontend/package.json` | `"name": "frontend"`, `"version": "0.0.0"` |
-| `frontend/src/App.jsx` | The CCTA `PendingModel` note and the two hardcoded "no model" strings above |
+| Drift | `src/cardiovision/config.py` is the source of truth for every constant and metric. If a documentation table disagrees with it, the table is stale and `config.py` wins |
+| Verification claims | `docs/verification.md` is the honest record of what has and has not been executed. Do not upgrade a "not verified" row without running the thing |
 
 ---
 
 ## Git
 
-58 tracked files, 43 untracked entries, 22 showing as modified (most of that is
-the LFS artefact described above). **Nothing in the recent work has been
-committed.** HEAD is `8488f79` *"Add CardioVision CCTA model weights"*.
+134 tracked files at the time of writing, including all of `src/cardiovision/`, the
+suites, `.github/` and six files under `.claude/memory/`. HEAD is `df14043`.
 
-Most of `src/cardiovision/` is untracked: the whole of `fusion/`, `rendering/`,
-`api/routers/`, `inference/ccta.py`, `inference/ecg.py`, `preprocessing/ccta_io.py`,
-`preprocessing/ecg_io.py`, `services/__init__.py`, `cli.py`, `pyproject.toml`,
-`LICENSE`, `CONTRIBUTING.md`, `.github/`, and four of the test files. A clone of
-`origin` today would not contain a working application.
+Uncommitted work exists in the tree — the documentation rewrite, the attribution
+pass, and the rest of `.claude/`. **Nothing is committed automatically**; staging and
+committing is the developer's decision.
+
+> [!WARNING]
+> Six `models/**` paths show as modified purely because git-lfs is not installed in
+> this environment: a `.pt`/`.pth` reads as ~130 bytes of pointer text rather than
+> weights. **Never run `git add -A` or `git commit -a` here** — it would commit
+> pointer text over real weights. Stage named paths.
+
+Verify before trusting these counts; they are a snapshot, and
+`git status --short` is authoritative.

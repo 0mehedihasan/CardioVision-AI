@@ -1,7 +1,7 @@
 # ==================================================
 # Git LFS
 #
-# The two trained checkpoints are tracked here rather than ignored, because a
+# The three trained checkpoints are tracked here rather than ignored, because a
 # clone without them installs cleanly and then cannot load a model. Clone with
 # git-lfs installed, or the .pt/.pth files arrive as ~130-byte pointer text
 # and the loader reports a corrupt checkpoint.

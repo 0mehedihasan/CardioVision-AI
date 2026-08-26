@@ -603,6 +603,81 @@ check("its scale is the source's, so mV stays mV",
       f"max = {np.abs(wf.display_signal).max():.3f}")
 
 # ============================================================
+print("\n=== 17. a declared byte offset is skipped, not read as signal ===")
+# ============================================================
+#
+# The PhysioNet Challenge releases store the samples in a MATLAB v4 file and
+# declare its 24-byte header in the format field as `16+24`. Ignoring that
+# offset does not fail: it reads the header bytes as one fabricated sample and
+# drops the last real one, which is exactly the kind of silent corruption the
+# robust normalisation would then scale everything else against.
+
+MAT_HEADER = (
+    b"\x1e\x00\x00\x00"      # type: little-endian, int16
+    b"\x0c\x00\x00\x00"      # mrows = 12
+    b"\xe8\x03\x00\x00"      # ncols = 1000
+    b"\x00\x00\x00\x00"      # imagf = 0
+    b"\x04\x00\x00\x00"      # namelen = 4
+    b"val\x00"               # name
+)
+check("the fixture header is the 24 bytes the format field declares",
+      len(MAT_HEADER) == 24, str(len(MAT_HEADER)))
+
+offset_hea = hea.replace(b"HR99999.dat 16 ", b"HR99999.mat 16+24 ")
+check("the fixture really does declare an offset",
+      b"16+24" in offset_hea and offset_hea != hea)
+
+parsed = E._parse_wfdb_header(offset_hea.decode())
+check("the offset is parsed off the format field",
+      set(parsed.byte_offsets) == {24}, str(sorted(set(parsed.byte_offsets))))
+check("and the format number is still 16, not 1624",
+      set(parsed.formats) == {16}, str(sorted(set(parsed.formats))))
+check("a bare format number parses as offset 0",
+      set(E._parse_wfdb_header(hea.decode()).byte_offsets) == {0})
+
+offset_record = E.load_ecg(
+    "HR99999.hea", offset_hea, companion={"HR99999.mat": MAT_HEADER + dat}
+)
+check("a .mat companion is matched by the name the header gives",
+      offset_record.signal.shape == (1000, 12),
+      str(offset_record.signal.shape))
+check("skipping the offset reproduces the offset-free record exactly",
+      np.allclose(offset_record.signal, wf.signal))
+check("no fabricated first sample survives",
+      np.allclose(offset_record.display_signal[0], wf.display_signal[0]))
+check("the last real sample is not dropped",
+      np.allclose(offset_record.display_signal[-1], wf.display_signal[-1]))
+check("the offset does not disturb the reported rate",
+      offset_record.sampling_frequency == 500.0)
+
+unnamed = E.load_ecg(
+    "HR99999.hea", offset_hea, companion={"signal.bin": MAT_HEADER + dat}
+)
+check("a single unlabelled companion is still taken as the signal file",
+      np.allclose(unnamed.signal, wf.signal))
+
+offset_zip = io.BytesIO()
+with zipfile.ZipFile(offset_zip, "w") as archive:
+    archive.writestr("HR99999.hea", offset_hea.decode())
+    archive.writestr("HR99999.mat", MAT_HEADER + dat)
+zipped_mat = E.load_ecg("record.zip", offset_zip.getvalue())
+check("a zip of .hea + .mat is paired, not rejected for having no .dat",
+      np.allclose(zipped_mat.signal, wf.signal))
+
+rejects("an offset longer than the file says so rather than decoding nothing",
+        lambda: E.load_ecg(
+            "HR99999.hea", offset_hea, companion={"HR99999.mat": b"\x00" * 8}
+        ),
+        "offset")
+rejects("a per-lead offset difference is refused, not averaged over",
+        lambda: E.load_ecg(
+            "HR99999.hea",
+            offset_hea.replace(b"16+24 1000(0)/mV 16 0 0", b"16+48 1000(0)/mV 16 0 0", 1),
+            companion={"HR99999.mat": MAT_HEADER + dat},
+        ),
+        "offset")
+
+# ============================================================
 print("\n" + "=" * 62)
 
 if STUBBED_SCIPY:

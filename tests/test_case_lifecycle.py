@@ -1054,8 +1054,10 @@ check(
     "multiple: true" in app and 'multiple={Boolean(modality.multiple)}' in app,
 )
 check(
-    "the primary file is the one that is not a .dat",
-    'endsWith(".dat")' in app and "splitEcgSelection" in app,
+    "the primary file is the .hea, and never a raw signal file",
+    'endsWith(".hea")' in app
+    and "/\\.(dat|mat)$/i" in app
+    and "splitEcgSelection" in app,
 )
 check(
     "companions are sent under their own field, not merged into file",

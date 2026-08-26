@@ -1,0 +1,36 @@
+# Citation metadata. GitHub reads this file and renders a "Cite this repository"
+# button from it.
+#
+# There is no paper and no DOI. Citing this repository cites software, not a
+# validated clinical result: none of the three trained models has regulatory
+# clearance or prospective validation, and the numbers reported in the model
+# cards come from small held-out splits (three test cases for CCTA). Cite it as
+# a research prototype.
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "CardioVision AI"
+abstract: >-
+  A locally deployed cardiovascular AI workstation combining echocardiography
+  segmentation, CCTA coronary lumen segmentation, 12-lead ECG classification and
+  a deterministic cross-modal evidence layer with MedGemma-generated narrative.
+  Research prototype; not for clinical use.
+type: software
+version: "4.0.0"
+license: MIT
+repository-code: "https://github.com/0mehedihasan/CardioVision-AI"
+url: "https://github.com/0mehedihasan/CardioVision-AI"
+authors:
+  - family-names: "Hasan"
+    given-names: "Md. Mehedi"
+    affiliation: >-
+      Advanced Machine Intelligence Research Lab (AMIR Lab), Department of
+      Computer Science and Engineering, Bangladesh University of Business and
+      Technology (BUBT), Dhaka, Bangladesh
+keywords:
+  - medical-imaging
+  - echocardiography
+  - computed-tomography-angiography
+  - electrocardiography
+  - segmentation
+  - deep-learning
+  - explainable-ai

@@ -174,14 +174,16 @@ log.
 
 | File | Lines | What it verifies |
 | --- | --- | --- |
-| `test_case_lifecycle.py` | 1 197 | Case store round-trip against a real SQLite file, plus static assertions on `App.jsx` |
+| `test_case_lifecycle.py` | 1 213 | Case store round-trip against a real SQLite file, auth, plus static assertions on `App.jsx` |
 | `test_ecg_rendering.py` | 738 | The SVG the API returns: geometry, mappings, caveats |
-| `test_ecg_pipeline.py` | 621 | Four ECG readers, WFDB 16/212, every rejection path |
+| `test_ecg_pipeline.py` | 696 | Four ECG readers, WFDB 16/212 and declared byte offsets, every rejection path |
+| `test_report_evidence.py` | 688 | The evidence layer and report assembly, including the forbidden-phrase sweep |
+| `test_ccta_pipeline.py` | 528 | Volume loading, resample geometry, windowing, quantification, model card |
 | `test_ecg_architecture.py` | 358 | `ECGResNet1D` vs the checkpoint, parameter by parameter |
 | `test_ecg_reporting.py` | 337 | Probability ordering, positives, caveats, lead ranking |
+| `torch_stub.py` | 257 | Constructs modules without torch; computes nothing |
 | `checkpoint_reader.py` | 182 | Reads a `.pt` zip without torch — shapes and metadata only |
-| `torch_stub.py` | 200 | Constructs modules without torch; computes nothing |
-| `test_all.py` | 69 | pytest wrapper: one test per suite, run as a subprocess |
+| `test_all.py` | 71 | pytest wrapper: one test per suite, run as a subprocess |
 
 The suites are **executable scripts**, not pytest modules, so they run on a
 machine with no torch and print a per-assertion report.

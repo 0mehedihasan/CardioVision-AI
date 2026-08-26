@@ -11,9 +11,12 @@ training distribution in a way no error message would reveal.
 
 Four input formats are accepted:
 
-    WFDB (.hea + .dat)  PTB-XL's native format. Sampling frequency, lead names
+    WFDB (.hea + signal) PTB-XL's native format. Sampling frequency, lead names
                         and per-lead gain all come from the header, so this is
-                        the only format that needs no assumptions.
+                        the only format that needs no assumptions. The signal
+                        file is usually ``.dat``; the PhysioNet Challenge
+                        distributions name it ``.mat`` and declare a byte offset
+                        in the format field (``16+24``), which is honoured.
     CSV / TSV / TXT     One column per lead, one row per sample. A header row
                         is detected and used to check the lead order.
     NPY                 A (samples, 12) or (12, samples) float array, which is
@@ -331,6 +334,7 @@ class _WfdbHeader:
     n_samples: int
     file_names: list[str]
     formats: list[int]
+    byte_offsets: list[int]
     gains: list[float]
     baselines: list[int]
     adc_zeros: list[int]
@@ -360,6 +364,7 @@ def _parse_wfdb_header(text: str) -> _WfdbHeader:
 
     file_names: list[str] = []
     formats: list[int] = []
+    byte_offsets: list[int] = []
     gains: list[float] = []
     baselines: list[int] = []
     adc_zeros: list[int] = []
@@ -375,10 +380,15 @@ def _parse_wfdb_header(text: str) -> _WfdbHeader:
 
         file_names.append(fields[0])
 
-        # format[xN:offset] — the parts after the format number describe
-        # interleaving and byte offsets, neither of which PTB-XL uses.
+        # format[xN][:skew][+offset] — PTB-XL uses a bare format number, but the
+        # PhysioNet Challenge releases store the samples in a MATLAB v4 file and
+        # declare its 24-byte header as `16+24`. Read the offset; a leading
+        # header read as samples would put one fabricated sample at the start of
+        # every lead and silently drop the last real one.
         fmt_field = fields[1]
         formats.append(int(re.match(r"^(\d+)", fmt_field).group(1)))
+        offset_match = re.search(r"\+(\d+)", fmt_field)
+        byte_offsets.append(int(offset_match.group(1)) if offset_match else 0)
 
         # gain(baseline)/units
         gain_field = fields[2] if len(fields) > 2 else "200"
@@ -409,6 +419,7 @@ def _parse_wfdb_header(text: str) -> _WfdbHeader:
         n_samples=n_samples,
         file_names=file_names,
         formats=formats,
+        byte_offsets=byte_offsets,
         gains=gains,
         baselines=baselines,
         adc_zeros=adc_zeros,
@@ -469,6 +480,25 @@ def _decode_wfdb(header: _WfdbHeader, signal_bytes: bytes) -> tuple[np.ndarray, 
             "This WFDB record mixes storage formats across leads, which this "
             "reader does not handle. Convert it to CSV first."
         )
+
+    # Every lead lives in one interleaved block, so a single shared offset is
+    # the only case that makes sense here; differing offsets would mean one file
+    # per lead, which this reader does not handle either.
+    offsets = set(header.byte_offsets)
+    if len(offsets) > 1:
+        raise UnsupportedEcgError(
+            "This WFDB record declares a different byte offset per lead, which "
+            "this reader does not handle. Convert it to CSV first."
+        )
+
+    offset = header.byte_offsets[0] if header.byte_offsets else 0
+    if offset:
+        if offset >= len(signal_bytes):
+            raise UnsupportedEcgError(
+                f"The header declares a {offset}-byte offset but the signal "
+                f"file is only {len(signal_bytes)} bytes long."
+            )
+        signal_bytes = signal_bytes[offset:]
 
     if fmt == 16:
         raw = _read_format_16(signal_bytes, header.n_signals, header.n_samples)
@@ -716,12 +746,12 @@ def load_ecg(
         declared_fs = sampling_frequency or header.sampling_frequency or None
         source_format = f"wfdb (format {header.formats[0]})"
 
-    elif suffix == ".dat":
+    elif suffix in (".dat", ".mat"):
         raise UnsupportedEcgError(
-            "A .dat file is raw samples with no description of how they are "
-            "laid out — number of leads, storage format, gain and sampling "
-            "rate all live in the matching .hea file. Upload the .hea (with "
-            "the .dat alongside it, or both in a .zip)."
+            f"A {suffix} file is raw samples with no description of how they "
+            "are laid out — number of leads, storage format, gain, byte offset "
+            "and sampling rate all live in the matching .hea file. Upload the "
+            f".hea (with the {suffix} alongside it, or both in a .zip)."
         )
 
     elif suffix == ".npy":
@@ -742,7 +772,8 @@ def load_ecg(
     else:
         raise UnsupportedEcgError(
             f"Unsupported ECG file type {suffix or '(none)'}. Accepted: WFDB "
-            "(.hea with its .dat, or a .zip of both), .csv, .tsv, .txt, .npy "
+            "(.hea with its .dat or .mat, or a .zip of both), .csv, .tsv, "
+            ".txt, .npy "
             "and .json."
         )
 
@@ -955,7 +986,7 @@ def _find_companion(
     header: _WfdbHeader,
     companion: dict[str, bytes],
 ) -> bytes:
-    """Locate the .dat that goes with a .hea, by name then by extension."""
+    """Locate the signal file that goes with a .hea, by name then by extension."""
     wanted = {name.lower() for name in header.file_names}
 
     for name, payload in companion.items():
@@ -963,14 +994,19 @@ def _find_companion(
             return payload
 
     for name, payload in companion.items():
-        if name.lower().endswith(".dat"):
+        if name.lower().endswith((".dat", ".mat")):
             return payload
+
+    # One unlabelled companion is unambiguous: it is the signal file.
+    if len(companion) == 1:
+        return next(iter(companion.values()))
 
     raise UnsupportedEcgError(
         "The header names "
         + ", ".join(header.file_names)
         + " but no matching signal file was uploaded. WFDB records are two "
-        "files: send the .dat alongside the .hea, or zip both together."
+        "files: send the signal file (.dat, or .mat in the PhysioNet Challenge "
+        "releases) alongside the .hea, or zip both together."
     )
 
 
@@ -1008,10 +1044,13 @@ def _load_zip(
         archive.read(headers[0]).decode("utf-8", errors="replace")
     )
 
+    # Anything that is not a header is a candidate signal file, because the
+    # signal file is not always `.dat` — the PhysioNet Challenge releases ship
+    # `.mat`. _find_companion matches the name the header itself declares first.
     companion = {
         name: archive.read(name)
         for name in members
-        if name.lower().endswith(".dat")
+        if not name.lower().endswith(".hea")
     }
 
     matrix, units = _decode_wfdb(header, _find_companion(header, companion))

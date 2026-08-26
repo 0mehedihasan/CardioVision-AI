@@ -133,6 +133,17 @@ infarct localisation, acute-versus-old distinction, or atrial fibrillation (not
 one of the five classes). Per-lead normalisation removes absolute voltage, so no
 millivolt amplitude can be attributed to it.
 
+**The packaging it was trained from.** `notebooks/03_ECG.ipynb` read PTB-XL in the
+PhysioNet Challenge repackaging: a WFDB `.hea` header beside a **`.mat`** signal
+file, with the format field declared as `16+24`. The `+24` is a byte offset — a
+24-byte MATLAB v4 header sits before the samples. MATLAB v4 is column-major, so a
+12 x N `val` matrix is byte-identical to WFDB's interleaved format-16 layout once
+that header is skipped. `preprocessing/ecg_io.py` parses the offset and skips it;
+reading it as signal does not raise, it fabricates one sample per lead (up to
+~124 mV, roughly 100x physiological) and drops the last real one. Both suffixes
+are in `ALLOWED_ECG_SUFFIXES`, and `tests/test_ecg_pipeline.py` section 17 pins
+the behaviour.
+
 Config files in `models/ecg/`, all real and all consistent with `config.py`:
 
 | File | Bytes | Contents |

@@ -6,10 +6,12 @@ body:
   - type: markdown
     attributes:
       value: |
-        Three of the four notebooks in `notebooks/` have no trained weights
-        behind them — CCTA, clinical risk and multimodal fusion. Requests to
-        "enable" those need weights, not wiring. If you have trained something,
-        say so here and it becomes a real conversation.
+        One of the four notebooks in `notebooks/` has no trained weights behind
+        it: `04_Multimodal_Fusion.ipynb`. There is no learned fusion model and no
+        clinical-risk model — `src/cardiovision/fusion/` is a deterministic
+        evidence aggregator, not a network. Requests to "enable" learned fusion
+        need weights, not wiring. If you have trained something, say so here and
+        it becomes a real conversation.
 
   - type: textarea
     id: problem

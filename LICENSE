@@ -1,6 +1,8 @@
 MIT License
 
-Copyright (c) 2026 CardioVision AI contributors
+Copyright (c) 2026 Md. Mehedi Hasan, Advanced Machine Intelligence Research Lab
+(AMIR Lab), Department of Computer Science and Engineering, Bangladesh
+University of Business and Technology (BUBT), Dhaka, Bangladesh
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -37,7 +39,13 @@ Do not use it to make, support, or defer a clinical decision about any patient.
 THIRD-PARTY MODELS AND DATA
 
 The MIT licence above covers this repository's own code. It does not relicense
-the model weights or the datasets, which carry their own terms:
+the model weights or the datasets, which carry their own terms.
+
+A small set of sample inputs from three of these datasets IS included, under
+samples/ — two cases per modality, so the upload paths can be exercised without
+fetching a dataset first. No training or validation split is included, and no
+patient data is. samples/README.md names each dataset, its size and its
+attribution requirement.
 
   - MedGemma (google/medgemma-*) — Google Health AI Developer Foundations
     terms of use. Not distributed with this repository; download it yourself
@@ -45,10 +53,18 @@ the model weights or the datasets, which carry their own terms:
 
   - CAMUS — the echocardiography segmentation dataset, released for research
     use by the University of Lyon (CREATIS). Cite the dataset paper if you
-    publish results derived from the echo checkpoint.
+    publish results derived from the echo checkpoint. Two patients are included
+    under samples/echo/, each shipping the dataset's own required citation
+    file; the frames are gzipped but otherwise unmodified.
+
+  - MedHK23/CCA — the coronary CT angiography dataset behind the CCTA
+    checkpoint, 20 volumes. Two of them are included under samples/ccta/ with
+    their ground truth; the other 18 are not. Check the dataset's terms at the
+    source before redistributing anything derived from it.
 
   - PTB-XL — the 12-lead ECG dataset, published on PhysioNet under the Open
-    Data Commons Attribution Licence v1.0. Attribution is required.
+    Data Commons Attribution Licence v1.0. Attribution is required. Two records
+    are included under samples/ecg/.
 
   - segmentation-models-pytorch, timm, PyTorch and the other dependencies —
     their own licences, unchanged, as resolved by your package manager.

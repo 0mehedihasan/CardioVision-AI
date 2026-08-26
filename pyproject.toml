@@ -5,13 +5,17 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "cardiovision"
 version = "4.0.0"
-description = "Locally deployed cardiovascular AI: echo segmentation, 12-lead ECG classification, and MedGemma clinical Q&A."
+description = "Locally deployed cardiovascular AI: echo segmentation, CCTA coronary lumen segmentation, 12-lead ECG classification, and MedGemma clinical Q&A."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
+authors = [
+    { name = "Md. Mehedi Hasan" },
+]
 keywords = [
     "medical-imaging",
     "echocardiography",
+    "computed-tomography-angiography",
     "electrocardiography",
     "ecg",
     "segmentation",
@@ -92,9 +96,9 @@ notebooks = [
 cardiovision = "cardiovision.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/mehedi/CardioVision-AI"
-Repository = "https://github.com/mehedi/CardioVision-AI"
-Issues = "https://github.com/mehedi/CardioVision-AI/issues"
+Homepage = "https://github.com/0mehedihasan/CardioVision-AI"
+Repository = "https://github.com/0mehedihasan/CardioVision-AI"
+Issues = "https://github.com/0mehedihasan/CardioVision-AI/issues"
 
 [tool.setuptools]
 package-dir = { "" = "src" }

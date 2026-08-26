@@ -72,8 +72,8 @@ const modalityConfig = {
     label: "Electrocardiography",
     short: "ECG",
     description: "12-lead recording, 10 s",
-    formats: "WFDB (.hea + .dat), CSV, NPY, JSON, ZIP",
-    accept: ".hea,.dat,.csv,.txt,.tsv,.npy,.json,.zip",
+    formats: "WFDB (.hea + .dat/.mat), CSV, NPY, JSON, ZIP",
+    accept: ".hea,.dat,.mat,.csv,.txt,.tsv,.npy,.json,.zip",
     analyzed: true,
     // WFDB splits one recording across a header and a signal file, and
     // neither is readable alone, so this row has to accept a set.
@@ -87,6 +87,10 @@ const modalityConfig = {
  * selection is split rather than rejected — header as the primary, the rest
  * as companions, which the backend matches by filename.
  *
+ * The signal file is .dat in the PhysioNet release of PTB-XL and .mat in the
+ * Challenge repackaging, so neither suffix can be assumed; the .hea is picked
+ * by name instead.
+ *
  * A selection with no header sends its first file as the primary and lets the
  * backend report what it could not read. Guessing which of two .dat files was
  * meant would turn a clear error into a silent wrong answer.
@@ -96,11 +100,15 @@ function splitEcgSelection(selected) {
 
   if (list.length === 0) return { file: null, companions: [] };
 
-  const found = list.findIndex(
-    (candidate) => !candidate.name.toLowerCase().endsWith(".dat")
+  const header = list.findIndex(
+    (candidate) => candidate.name.toLowerCase().endsWith(".hea")
   );
 
-  const index = found === -1 ? 0 : found;
+  const readableAlone = list.findIndex(
+    (candidate) => !/\.(dat|mat)$/i.test(candidate.name)
+  );
+
+  const index = header !== -1 ? header : readableAlone === -1 ? 0 : readableAlone;
 
   return {
     file: list[index],
@@ -2978,7 +2986,7 @@ function ClinicalResult({ clinicalData }) {
       <PendingModel
         label="Clinical risk model"
         note="There is no trained clinical prediction model, so these values are not scored and no risk level is computed."
-        requirement="notebooks/03_Clinical_Model.ipynb needs to be written and run, with the fitted model saved to models/clinical/."
+        requirement="There is no clinical-risk notebook in this repository. One would have to be written and run, with the fitted model saved under models/, before any value here could be scored."
       />
 
       <div>

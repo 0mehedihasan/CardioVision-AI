@@ -32,7 +32,7 @@ Thumbs.db
 
 # ---- Large weights ----
 #
-# The two trained checkpoints ARE tracked, via Git LFS — see .gitattributes.
+# The three trained checkpoints ARE tracked, via Git LFS — see .gitattributes.
 # They are what makes this repo runnable, so ignoring *.pt / *.pth here would
 # silently defeat the LFS configuration and leave a clone that installs
 # cleanly and then cannot load a model.
@@ -49,3 +49,9 @@ models/medgemma-1.5-4b-it/
 # top level honest for anything else written there at runtime.
 !data/.gitignore
 !data/sample/
+
+# ---- Local Claude state ----
+#
+# .claude/ itself IS tracked: it is shared project context. This one subdirectory
+# is for anything local or private, so it never becomes part of the repository.
+.claude/local/

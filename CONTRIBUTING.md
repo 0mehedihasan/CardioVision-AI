@@ -35,7 +35,7 @@ was wrong — not why it was inconvenient.
 ## Getting set up
 
 ```bash
-git clone https://github.com/mehedi/CardioVision-AI.git
+git clone https://github.com/0mehedihasan/CardioVision-AI.git
 cd CardioVision-AI
 
 # The checkpoints are Git LFS objects. Without this they arrive as ~130-byte
