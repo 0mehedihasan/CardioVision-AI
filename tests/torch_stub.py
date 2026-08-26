@@ -1,10 +1,13 @@
 """
 A minimal ``torch`` stand-in for tests that must not depend on torch.
 
-Enough of ``torch.nn`` to *construct* the models in this repo and inspect their
+Enough of ``torch.nn`` to *construct* the models in this repo — the 1-D ECG
+ResNet, the 2-D echo encoder and the 3-D CCTA U-Net — and inspect their
 parameter names and shapes. Nothing here computes anything: there is no forward
 pass, no autograd, and no tensor arithmetic. That is deliberate — a stub that
 pretended to compute would invite someone to read its output as a result.
+``torch.nn.functional`` is present but every member of it raises, for the same
+reason.
 
 Use it for structural checks (does this architecture match the checkpoint?) and
 for exercising pure-Python reporting logic that happens to live in a module
@@ -111,6 +114,47 @@ class Conv2d(Module):
             self.register("bias", (out_channels,))
 
 
+def _triple(value) -> tuple[int, int, int]:
+    if isinstance(value, tuple):
+        return value
+    return (value, value, value)
+
+
+class Conv3d(Module):
+    def __init__(self, in_channels, out_channels, kernel_size, stride=1,
+                 padding=0, bias=True, **kwargs) -> None:
+        super().__init__()
+        self.register("weight", (out_channels, in_channels, *_triple(kernel_size)))
+        if bias:
+            self.register("bias", (out_channels,))
+
+
+class ConvTranspose3d(Module):
+    """Note the transposed weight layout: (in, out, k, k, k), as torch stores it."""
+
+    def __init__(self, in_channels, out_channels, kernel_size, stride=1,
+                 padding=0, bias=True, **kwargs) -> None:
+        super().__init__()
+        self.register("weight", (in_channels, out_channels, *_triple(kernel_size)))
+        if bias:
+            self.register("bias", (out_channels,))
+
+
+class InstanceNorm3d(Module):
+    """Affine instance norm has weight and bias and no running statistics."""
+
+    def __init__(self, features, affine=False, track_running_stats=False,
+                 **kwargs) -> None:
+        super().__init__()
+        if affine:
+            self.register("weight", (features,))
+            self.register("bias", (features,))
+        if track_running_stats:
+            self.register("running_mean", (features,))
+            self.register("running_var", (features,))
+            self.register("num_batches_tracked", ())
+
+
 class BatchNorm1d(Module):
     def __init__(self, features, **kwargs) -> None:
         super().__init__()
@@ -162,14 +206,25 @@ def install() -> bool:
     nn.Sequential = Sequential
     nn.Conv1d = Conv1d
     nn.Conv2d = Conv2d
+    nn.Conv3d = Conv3d
+    nn.ConvTranspose3d = ConvTranspose3d
     nn.BatchNorm1d = BatchNorm1d
+    nn.InstanceNorm3d = InstanceNorm3d
     nn.Linear = Linear
     nn.GELU = Passthrough
     nn.ReLU = Passthrough
+    nn.LeakyReLU = Passthrough
     nn.Dropout = Passthrough
     nn.MaxPool1d = Passthrough
+    nn.MaxPool3d = Passthrough
     nn.AdaptiveAvgPool1d = Passthrough
     nn.Identity = Passthrough
+
+    # torch.nn.functional: every member computes, so every member refuses.
+    functional = types.ModuleType("torch.nn.functional")
+    for name in ("interpolate", "relu", "sigmoid", "softmax", "pad"):
+        setattr(functional, name, _unavailable(f"nn.functional.{name}"))
+    nn.functional = functional
 
     torch = types.ModuleType("torch")
     torch.nn = nn
@@ -180,15 +235,17 @@ def install() -> bool:
     torch.device = lambda name: name
     torch.float32 = "float32"
     torch.no_grad = lambda: _NullContext()
+    torch.inference_mode = lambda *args, **kwargs: _NullContext()
 
     # Anything that would produce numbers fails loudly rather than returning
     # something plausible.
     for name in ("from_numpy", "sigmoid", "softmax", "argmax", "flatten",
-                 "load", "save", "tensor", "zeros", "ones"):
+                 "load", "save", "tensor", "zeros", "ones", "cat", "stack"):
         setattr(torch, name, _unavailable(name))
 
     sys.modules["torch"] = torch
     sys.modules["torch.nn"] = nn
+    sys.modules["torch.nn.functional"] = functional
     return True
 
 

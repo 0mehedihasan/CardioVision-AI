@@ -2,7 +2,7 @@
 """
 pytest entry point for the verification suites.
 
-The five suites in this directory are executable scripts, not pytest modules,
+The suites in this directory are executable scripts, not pytest modules,
 and that is deliberate: each one stubs whatever part of the ML stack is missing
 and prints a per-assertion report, so it runs on a machine where torch was never
 installed and tells you exactly which invariant broke. Rewriting them as
@@ -34,6 +34,8 @@ HERE = Path(__file__).resolve().parent
 # suites fail on top of it.
 SUITES = (
     "test_case_lifecycle.py",
+    "test_report_evidence.py",
+    "test_ccta_pipeline.py",
     "test_ecg_reporting.py",
     "test_ecg_pipeline.py",
     "test_ecg_rendering.py",

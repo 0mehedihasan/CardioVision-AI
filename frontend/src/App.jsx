@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "./App.css";
 
 import {
+  analyzeCcta,
   analyzeEcg,
   analyzeEcho,
   askClinicalQuestion,
@@ -13,6 +14,7 @@ import {
   fetchCases,
   fetchHealth,
   fetchSession,
+  generateReport,
   login,
   logout,
   releaseImages,
@@ -20,11 +22,13 @@ import {
   setUnauthorizedHandler,
 } from "./api";
 import CaseList from "./components/CaseList";
+import CctaResult from "./components/CctaResult";
 import EcgResult from "./components/EcgResult";
 import EchoResult from "./components/EchoResult";
 import Login from "./components/Login";
 import PatientForm from "./components/PatientForm";
 import PendingModel from "./components/PendingModel";
+import ReportResult from "./components/ReportResult";
 
 const initialClinicalData = {
   age: "",
@@ -62,7 +66,7 @@ const modalityConfig = {
     description: "Cardiac CT / coronary anatomy",
     formats: "DICOM, NIfTI, ZIP series",
     accept: ".dcm,.nii,.nii.gz,.zip,.png,.jpg,.jpeg",
-    analyzed: false,
+    analyzed: true,
   },
   ecg: {
     label: "Electrocardiography",
@@ -109,6 +113,7 @@ const navItems = [
   { id: "results", number: "02", label: "Analysis" },
   { id: "explainability", number: "03", label: "Explainability" },
   { id: "assistant", number: "04", label: "Case assistant" },
+  { id: "report", number: "05", label: "Integrated report" },
 ];
 
 /* ============================================================
@@ -632,8 +637,25 @@ function CaseWorkspace({
 
   const [ecgResult, setEcgResult] = useState(initialCase?.ecg || null);
 
+  const [cctaResult, setCctaResult] = useState(initialCase?.ccta || null);
+
+  /* The report is derived from the other three, so it is generated on demand
+     and never restored from storage into this state. A stored report describes
+     the case as it was when it was written, and re-rendering it beside newer
+     analyses would let a stale summary sit under fresh findings. */
+  const [report, setReport] = useState(null);
+  const [reportPrompt, setReportPrompt] = useState(null);
+  const [isReporting, setIsReporting] = useState(false);
+  const [reportError, setReportError] = useState(null);
+
   const [activeResult, setActiveResult] = useState(
-    initialCase?.echo ? "echo" : initialCase?.ecg ? "ecg" : "overview"
+    initialCase?.echo
+      ? "echo"
+      : initialCase?.ccta
+        ? "ccta"
+        : initialCase?.ecg
+          ? "ecg"
+          : "overview"
   );
 
   const [conversation, setConversation] = useState(
@@ -652,6 +674,7 @@ function CaseWorkspace({
   const restoredFilename =
     initialCase?.echo?.input?.filename || initialCase?.source_file || "";
   const restoredEcgFilename = initialCase?.ecg?.input?.filename || "";
+  const restoredCctaFilename = initialCase?.ccta?.input?.filename || "";
 
   const [dragOver, setDragOver] = useState(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -659,6 +682,9 @@ function CaseWorkspace({
 
   const [isAnalyzingEcg, setIsAnalyzingEcg] = useState(false);
   const [ecgError, setEcgError] = useState(null);
+
+  const [isAnalyzingCcta, setIsAnalyzingCcta] = useState(false);
+  const [cctaError, setCctaError] = useState(null);
 
   const [question, setQuestion] = useState("");
   const [isAsking, setIsAsking] = useState(false);
@@ -675,6 +701,7 @@ function CaseWorkspace({
 
   const echoModelReady = Boolean(health?.modalities?.echo?.available);
   const ecgModelReady = Boolean(health?.modalities?.ecg?.available);
+  const cctaModelReady = Boolean(health?.modalities?.ccta?.available);
   const medgemmaReady = Boolean(health?.models?.medgemma?.loaded);
   const backendOnline = Boolean(health);
 
@@ -689,6 +716,7 @@ function CaseWorkspace({
 
   const blobUrls = useRef(null);
   const figureUrls = useRef(null);
+  const cctaFigureUrls = useRef(null);
 
   useEffect(() => {
     const stored = initialCase?.images;
@@ -760,12 +788,49 @@ function CaseWorkspace({
     };
   }, [initialCase]);
 
+  /* Third of three, for the same reason: a case can hold CCTA renders and
+     nothing else, and a failed fetch here must leave the ECG strip and the
+     echo overlays alone. */
+  useEffect(() => {
+    const stored = initialCase?.ccta_figures;
+
+    if (!stored || Object.keys(stored).length === 0) return undefined;
+
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const urls = await fetchCaseFigures(stored);
+
+        if (cancelled) {
+          releaseImages(urls);
+          return;
+        }
+
+        cctaFigureUrls.current = urls;
+
+        setCctaResult((previous) =>
+          previous ? { ...previous, figures: urls } : previous
+        );
+      } catch {
+        // The slice views are how the mask is read, but the quantification
+        // and the coverage report stand without them.
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [initialCase]);
+
   useEffect(
     () => () => {
       releaseImages(blobUrls.current);
       releaseImages(figureUrls.current);
+      releaseImages(cctaFigureUrls.current);
       blobUrls.current = null;
       figureUrls.current = null;
+      cctaFigureUrls.current = null;
     },
     []
   );
@@ -785,11 +850,18 @@ function CaseWorkspace({
   const canAnalyze = Boolean(files.echo) && echoModelReady && !isAnalyzing;
   const canAnalyzeEcg =
     Boolean(files.ecg) && ecgModelReady && !isAnalyzingEcg;
+  const canAnalyzeCcta =
+    Boolean(files.ccta) && cctaModelReady && !isAnalyzingCcta;
 
-  /* Derived rather than stored. The results panel opens as soon as either
+  /* Derived rather than stored. The results panel opens as soon as any
      modality has output, and a flag kept alongside the results is a flag that
      can disagree with them. */
-  const analysisComplete = Boolean(echoResult) || Boolean(ecgResult);
+  const analysisComplete =
+    Boolean(echoResult) || Boolean(ecgResult) || Boolean(cctaResult);
+
+  /* A report needs at least one analysed modality to describe. Below that it
+     would be a document about nothing, which is worse than no document. */
+  const canReport = analysisComplete && !isReporting;
 
   /* Nothing to write is not an error, but it should not be a save either. */
   const canSave =
@@ -797,6 +869,7 @@ function CaseWorkspace({
     hasClinicalData ||
     Boolean(echoResult) ||
     Boolean(ecgResult) ||
+    Boolean(cctaResult) ||
     conversation.length > 0;
 
   const updatePatient = (field, value) => {
@@ -839,6 +912,11 @@ function CaseWorkspace({
       setEchoRotate(0);
       setEchoFlip(false);
     }
+
+    if (modality === "ccta") {
+      setCctaResult(null);
+      setCctaError(null);
+    }
   };
 
   const removeFile = (modality) => {
@@ -850,6 +928,11 @@ function CaseWorkspace({
       setAnalysisError(null);
       setEchoRotate(0);
       setEchoFlip(false);
+    }
+
+    if (modality === "ccta") {
+      setCctaResult(null);
+      setCctaError(null);
     }
 
     if (modality === "ecg") {
@@ -874,6 +957,7 @@ function CaseWorkspace({
         silent = false,
         echo = echoResult,
         ecg = ecgResult,
+        ccta = cctaResult,
         messages = conversation,
       } = overrides;
 
@@ -926,6 +1010,21 @@ function CaseWorkspace({
         }
       }
 
+      /* And the third, same split. The CCTA renders are the heaviest of the
+         three — twelve slice PNGs plus the Grad-CAM set — so they never travel
+         inside ccta_json. */
+      if (ccta) {
+        const { figures, ...rest } = ccta;
+
+        payload.ccta = { ...rest, analyzed: true };
+
+        const encoded = freshRenders(figures);
+
+        if (Object.keys(encoded).length > 0) {
+          payload.ccta_figures = encoded;
+        }
+      }
+
       setIsSaving(true);
 
       if (!silent) setSaveError(null);
@@ -957,6 +1056,7 @@ function CaseWorkspace({
       clinicalData,
       echoResult,
       ecgResult,
+      cctaResult,
       conversation,
       onCasesChanged,
     ]
@@ -977,16 +1077,16 @@ function CaseWorkspace({
   /* ==========================================================
      ANALYSIS
 
-     Calls POST /api/analyze/echo and POST /api/analyze/ecg and
-     renders the models' actual output. There are no simulated
-     results anywhere in this flow.
+     Calls POST /api/analyze/echo, /api/analyze/ecg and
+     /api/analyze/ccta and renders the models' actual output.
+     There are no simulated results anywhere in this flow.
 
-     The two run separately rather than behind one button. They are
-     independent models on independent studies, each takes real time,
-     and re-running one must never quietly re-run the other.
+     The three run separately rather than behind one button. They
+     are independent models on independent studies, each takes real
+     time, and re-running one must never quietly re-run another.
      ========================================================== */
 
-  /* Both analyses need a case row to exist first, so the backend can file the
+  /* Every analysis needs a case row to exist first, so the backend can file the
      source recording under it. Running a study is a real commitment, so
      creating the record at that moment is the honest behaviour — and it is
      what stops a completed analysis from evaporating on refresh. */
@@ -1111,12 +1211,63 @@ function CaseWorkspace({
     onReloadHealth,
   ]);
 
+  /* The CCTA run is the slow one — a sliding window over a resampled volume —
+     so the window budget is left at the backend default rather than trimmed
+     here. A truncated run comes back with `coverage.complete: false`, and the
+     result component reports the unlooked-at fraction instead of presenting a
+     partial pass as a whole one. */
+  const runCctaAnalysis = useCallback(async () => {
+    if (!files.ccta || !cctaModelReady || isAnalyzingCcta) return;
+
+    setIsAnalyzingCcta(true);
+    setCctaError(null);
+    setCctaResult(null);
+
+    scrollToSection("results");
+
+    const targetCase = await ensureCase();
+
+    try {
+      const result = await analyzeCcta(files.ccta, {
+        caseId: targetCase || undefined,
+      });
+
+      setCctaResult(result);
+      setActiveResult("ccta");
+
+      if (storageReady) {
+        await persist({
+          silent: true,
+          ccta: result,
+          caseId: targetCase || undefined,
+        });
+      } else {
+        setDirty(true);
+      }
+    } catch (error) {
+      setCctaError(error.message);
+      onReloadHealth();
+    } finally {
+      setIsAnalyzingCcta(false);
+    }
+  }, [
+    files.ccta,
+    cctaModelReady,
+    isAnalyzingCcta,
+    storageReady,
+    ensureCase,
+    persist,
+    scrollToSection,
+    onReloadHealth,
+  ]);
+
+
   /* ==========================================================
      CASE STATE FOR THE LANGUAGE MODEL
 
      Sent structured; the backend renders it into prompt text,
      including an explicit list of unavailable modalities so the
-     model cannot invent CCTA or ECG findings.
+     model cannot invent findings for a study that was never run.
      ========================================================== */
 
   const caseState = useMemo(
@@ -1124,6 +1275,24 @@ function CaseWorkspace({
       case_id: caseId || "",
       patient: patientData,
       clinical: clinicalData,
+      /* First in the object because the backend's prompt builder writes the
+         sections in this order: CCTA, echo, ECG. The figures are dropped — the
+         language model cannot read a PNG — but `coverage` is sent, because a
+         truncated sliding window is the difference between "no lumen there"
+         and "that region was never examined". */
+      ccta: cctaResult
+        ? {
+            analyzed: true,
+            model: cctaResult.model,
+            input: cctaResult.input,
+            threshold: cctaResult.threshold,
+            findings: cctaResult.findings,
+            quantification: cctaResult.quantification,
+            coverage: cctaResult.coverage,
+            explainability: cctaResult.explainability,
+            limitations: cctaResult.limitations,
+          }
+        : { analyzed: false },
       echo: echoResult
         ? {
             analyzed: true,
@@ -1160,12 +1329,78 @@ function CaseWorkspace({
         : { analyzed: false },
       modalities_provided: {
         echo: Boolean(files.echo) || Boolean(echoResult),
-        ccta: Boolean(files.ccta),
+        ccta: Boolean(files.ccta) || Boolean(cctaResult),
         ecg: Boolean(files.ecg) || Boolean(ecgResult),
       },
     }),
-    [caseId, patientData, clinicalData, echoResult, ecgResult, files]
+    [
+      caseId,
+      patientData,
+      clinicalData,
+      echoResult,
+      ecgResult,
+      cctaResult,
+      files,
+    ]
   );
+
+  /* ==========================================================
+     INTEGRATED REPORT
+
+     POST /api/report. The structured half is deterministic and is
+     assembled from the analyses already on the case; MedGemma only
+     writes the narrative on top. So a language-model failure comes
+     back as 200 with `ai_summary: null` and a reason, and is
+     rendered as a missing summary beside intact findings rather
+     than as a failed report.
+
+     `includePrompt` is always on. A narrative that cannot be
+     checked against the text it was given is a narrative that has
+     to be taken on trust, and this is a clinical tool.
+     ========================================================== */
+
+  const runReport = useCallback(async () => {
+    if (!analysisComplete || isReporting) return;
+
+    setIsReporting(true);
+    setReportError(null);
+
+    scrollToSection("report");
+
+    try {
+      const data = await generateReport(caseState, {
+        includeSummary: true,
+        includePrompt: true,
+        // Only file it against a case that exists. Reporting on an unsaved
+        // scratch case should not create a record as a side effect.
+        save: Boolean(caseId) && storageReady,
+      });
+
+      setReport(data.report || null);
+      setReportPrompt(data.prompt || null);
+
+      if (data.save_error) {
+        // The report itself is on screen and intact. Say that storing it
+        // failed rather than implying the report did.
+        setReportError(
+          `The report was built but could not be saved: ${data.save_error}`
+        );
+      }
+    } catch (error) {
+      setReportError(error.message);
+      onReloadHealth();
+    } finally {
+      setIsReporting(false);
+    }
+  }, [
+    analysisComplete,
+    isReporting,
+    caseState,
+    caseId,
+    storageReady,
+    scrollToSection,
+    onReloadHealth,
+  ]);
 
   const askQuestion = async (text) => {
     const trimmed = (text ?? question).trim();
@@ -1216,7 +1451,7 @@ function CaseWorkspace({
     { label: "Patient", active: hasPatientData },
     { label: "Clinical", active: hasClinicalData },
     { label: "Echo findings", active: Boolean(echoResult) },
-    { label: "CCTA", active: false, unavailable: true },
+    { label: "CCTA findings", active: Boolean(cctaResult) },
     { label: "ECG findings", active: Boolean(ecgResult) },
   ];
 
@@ -1234,9 +1469,10 @@ function CaseWorkspace({
         <h1>Understand the heart through multimodal AI.</h1>
 
         <p>
-          Echocardiography segmentation and 12-lead ECG classification run
-          locally on trained models. CCTA, clinical risk and multimodal fusion
-          have no models behind them and are clearly marked as unavailable.
+          Coronary CT lumen segmentation, echocardiography segmentation and
+          12-lead ECG classification run locally on trained models. Clinical
+          risk scoring and learned multimodal fusion have no models behind them
+          and are clearly marked as unavailable.
         </p>
       </section>
 
@@ -1276,6 +1512,22 @@ function CaseWorkspace({
             {health?.modalities?.ecg?.note ||
               health?.models?.ecg?.error ||
               "The ECG classification model did not load."}
+          </span>
+
+          <button className="cv-secondary-button" onClick={onReloadHealth}>
+            Recheck
+          </button>
+        </div>
+      )}
+
+      {backendOnline && !cctaModelReady && (
+        <div className="cv-banner warning">
+          <strong>CCTA model unavailable</strong>
+
+          <span>
+            {health?.modalities?.ccta?.note ||
+              health?.models?.ccta?.error ||
+              "The CT lumen segmentation model did not load."}
           </span>
 
           <button className="cv-secondary-button" onClick={onReloadHealth}>
@@ -1384,6 +1636,15 @@ function CaseWorkspace({
               </div>
             )}
 
+            {restoredCctaFilename && !files.ccta && (
+              <div className="cv-restored-note">
+                CT volume restored from the saved record:{" "}
+                <code>{restoredCctaFilename}</code>. The mask and the coverage
+                report below are the stored ones. Re-select the volume to
+                segment it again.
+              </div>
+            )}
+
             <div className="cv-modality-list">
               {Object.entries(modalityConfig).map(([key, modality]) => (
                 <ModalityRow
@@ -1405,21 +1666,24 @@ function CaseWorkspace({
         <div className="cv-analysis-bar">
           <div>
             <div className="cv-analysis-title">
-              {files.echo || files.ecg
+              {files.echo || files.ecg || files.ccta
                 ? `Ready to run ${[
+                    files.ccta ? "CT lumen segmentation" : null,
                     files.echo ? "echo segmentation" : null,
                     files.ecg ? "ECG classification" : null,
                   ]
                     .filter(Boolean)
-                    .join(" and ")}`
-                : "An echo image or an ECG recording is required to run analysis"}
+                    .join(", ")
+                    .replace(/, ([^,]*)$/, " and $1")}`
+                : "A CT volume, an echo image or an ECG recording is required to run analysis"}
             </div>
 
             {/* Each modality runs on its own button, so the subtitle names
                 what is loaded for each rather than implying one action. */}
             <div className="cv-analysis-subtitle">
-              {files.echo || files.ecg
+              {files.echo || files.ecg || files.ccta
                 ? [
+                    files.ccta ? `CCTA: ${files.ccta.name}` : null,
                     files.echo ? `Echo: ${files.echo.name}` : null,
                     files.ecg
                       ? `ECG: ${files.ecg.name}${
@@ -1436,8 +1700,8 @@ function CaseWorkspace({
                   ]
                     .filter(Boolean)
                     .join(" · ")
-                : "Echo and ECG are the two trained models. Clinical data " +
-                  "alone can still be discussed in the case assistant."}
+                : "CCTA, echo and ECG are the three trained models. Clinical " +
+                  "data alone can still be discussed in the case assistant."}
             </div>
           </div>
 
@@ -1448,6 +1712,26 @@ function CaseWorkspace({
               onClick={() => persist()}
             >
               {isSaving ? "Saving…" : caseId ? "Save changes" : "Save case"}
+            </button>
+
+            <button
+              className={`cv-primary-button ${
+                isAnalyzingCcta ? "loading" : ""
+              }`}
+              disabled={!canAnalyzeCcta}
+              onClick={() => runCctaAnalysis()}
+            >
+              {isAnalyzingCcta ? (
+                <>
+                  <span className="cv-button-spinner" />
+                  Segmenting CT
+                </>
+              ) : (
+                <>
+                  Analyze CCTA
+                  <span aria-hidden="true">→</span>
+                </>
+              )}
             </button>
 
             <button
@@ -1531,19 +1815,29 @@ function CaseWorkspace({
           </div>
         )}
 
+        {cctaError && (
+          <div className="cv-banner error">
+            <strong>CCTA analysis failed</strong>
+
+            <span>{cctaError}</span>
+          </div>
+        )}
+
         {!analysisComplete &&
           !isAnalyzing &&
           !isAnalyzingEcg &&
+          !isAnalyzingCcta &&
           !analysisError &&
-          !ecgError && (
+          !ecgError &&
+          !cctaError && (
             <div className="cv-empty-analysis">
               <div className="cv-empty-icon">◌</div>
 
               <h3>No analysis generated yet</h3>
 
               <p>
-                Upload an echocardiography image or a 12-lead ECG above, then
-                run the model for that modality.
+                Upload a coronary CT volume, an echocardiography image or a
+                12-lead ECG above, then run the model for that modality.
               </p>
 
               <button
@@ -1559,13 +1853,15 @@ function CaseWorkspace({
 
         {isAnalyzingEcg && <EcgLoader />}
 
+        {isAnalyzingCcta && <CctaLoader />}
+
         {analysisComplete && (
           <div className="cv-results">
             <div className="cv-tabs" role="tablist">
               {[
                 ["overview", "Overview", true],
                 ["echo", "Echo", true],
-                ["ccta", "CCTA", false],
+                ["ccta", "CCTA", true],
                 ["ecg", "ECG", true],
                 ["clinical", "Clinical", false],
               ].map(([id, label, available]) => (
@@ -1588,12 +1884,14 @@ function CaseWorkspace({
               <OverviewResult
                 echoResult={echoResult}
                 ecgResult={ecgResult}
+                cctaResult={cctaResult}
                 files={files}
                 clinicalData={clinicalData}
                 patientData={patientData}
                 hasClinicalData={hasClinicalData}
                 restoredFilename={restoredFilename}
                 restoredEcgFilename={restoredEcgFilename}
+                restoredCctaFilename={restoredCctaFilename}
               />
             )}
 
@@ -1614,14 +1912,19 @@ function CaseWorkspace({
                 </div>
               ))}
 
-            {activeResult === "ccta" && (
-              <PendingModel
-                label="Coronary CT angiography"
-                file={files.ccta}
-                note="There is no trained CCTA model yet, so nothing is inferred from CT data."
-                requirement="notebooks/01_CCTA_Training.ipynb needs to be written and run, and the resulting weights saved to models/ccta/."
-              />
-            )}
+            {activeResult === "ccta" &&
+              (cctaResult ? (
+                <CctaResult result={cctaResult} />
+              ) : (
+                <div className="cv-empty-analysis">
+                  <p>
+                    {files.ccta
+                      ? "This CT volume has not been segmented yet — run " +
+                        "“Analyze CCTA” above."
+                      : "No CT volume was analysed in this case."}
+                  </p>
+                </div>
+              ))}
 
             {activeResult === "ecg" &&
               (ecgResult ? (
@@ -1664,6 +1967,11 @@ function CaseWorkspace({
                 {ecgResult
                   ? " ECG attribution is per-lead rather than per-pixel, so " +
                     "it lives with the waveform on the ECG tab above."
+                  : ""}
+                {cctaResult
+                  ? " CT attribution is 3-D and covers one patch of the " +
+                    "volume, so it lives with the slice views on the CCTA tab " +
+                    "above."
                   : ""}
               </p>
             </div>
@@ -1920,6 +2228,91 @@ function CaseWorkspace({
             </div>
           </div>
         </div>
+      </section>
+
+      {/* ==================================================
+          05. INTEGRATED REPORT
+
+          Deliberately not gated on `analysisComplete`: the empty
+          state here says what a report would need, which is more
+          useful than an absent section.
+      ================================================== */}
+
+      <section id="report" className="cv-section">
+        <div className="cv-section-head">
+          <div>
+            <div className="cv-section-index">05 / Integrated report</div>
+
+            <h2>Assemble the case into one document</h2>
+
+            <p>
+              Every analysis on this case, aggregated by software rather than by
+              a model. There is no learned fusion here — the layer restates what
+              each model reported, names what is missing, and lists the
+              uncertainties. MedGemma writes the narrative on top of that, and
+              the narrative is optional.
+            </p>
+          </div>
+
+          <button
+            className={`cv-primary-button ${isReporting ? "loading" : ""}`}
+            disabled={!canReport}
+            onClick={() => runReport()}
+          >
+            {isReporting ? (
+              <>
+                <span className="cv-button-spinner" />
+                Building
+              </>
+            ) : (
+              <>
+                {report ? "Rebuild report" : "Build report"}
+                <span aria-hidden="true">→</span>
+              </>
+            )}
+          </button>
+        </div>
+
+        {reportError && (
+          <div className="cv-banner error">
+            <strong>Report</strong>
+
+            <span>{reportError}</span>
+          </div>
+        )}
+
+        {!analysisComplete && (
+          <div className="cv-empty-analysis">
+            <div className="cv-empty-icon">◌</div>
+
+            <h3>Nothing to report on yet</h3>
+
+            <p>
+              A report describes analyses that already ran. Segment a CT volume
+              or an echo image, or classify an ECG, and the report will restate
+              exactly those findings — no more.
+            </p>
+          </div>
+        )}
+
+        {analysisComplete && !report && !isReporting && (
+          <div className="cv-empty-analysis">
+            <div className="cv-empty-icon">◌</div>
+
+            <h3>No report built for this case</h3>
+
+            <p>
+              The structured half of the report is deterministic and will build
+              whether or not the language model is loaded
+              {medgemmaReady
+                ? "."
+                : ". MedGemma is not loaded, so the narrative section will be " +
+                  "marked unavailable and the findings will be intact."}
+            </p>
+          </div>
+        )}
+
+        {report && <ReportResult report={report} prompt={reportPrompt} />}
       </section>
 
       {/* ==================================================
@@ -2236,6 +2629,35 @@ function EcgLoader() {
   );
 }
 
+/* The slowest of the three by a wide margin: a 96³ window is stepped across a
+   resampled volume, so the step list names the pass rather than pretending it
+   is one forward call. */
+function CctaLoader() {
+  return (
+    <div className="cv-analysis-loader">
+      <div className="cv-loader-spinner" />
+
+      <div>
+        <h3>Segmenting the coronary CT volume</h3>
+
+        <p>
+          Resampling to 1&nbsp;mm isotropic, then stepping a 96³ window across
+          the volume with the 3-D UNet and accumulating the probabilities. This
+          takes noticeably longer than the other two models, and the first run
+          also loads the weights.
+        </p>
+      </div>
+
+      <div className="cv-loader-steps">
+        <LoaderStep number="01" text="Decode + resample" active />
+        <LoaderStep number="02" text="Sliding window" active />
+        <LoaderStep number="03" text="Quantification" active />
+        <LoaderStep number="04" text="3-D Grad-CAM" active />
+      </div>
+    </div>
+  );
+}
+
 /* ============================================================
    OVERVIEW RESULT
 
@@ -2247,12 +2669,14 @@ function EcgLoader() {
 function OverviewResult({
   echoResult,
   ecgResult,
+  cctaResult,
   files,
   clinicalData,
   patientData,
   hasClinicalData,
   restoredFilename,
   restoredEcgFilename,
+  restoredCctaFilename,
 }) {
   const structures = echoResult?.structures || [];
   const present = structures.filter((structure) => structure.present);
@@ -2268,15 +2692,34 @@ function OverviewResult({
     files.echo?.name || echoResult?.input?.filename || restoredFilename;
   const ecgName =
     files.ecg?.name || ecgResult?.input?.filename || restoredEcgFilename;
+  const cctaName =
+    files.ccta?.name || cctaResult?.input?.filename || restoredCctaFilename;
 
   const predictions = ecgResult?.predictions || [];
   const positives = ecgResult?.positive_classes || [];
   const ecgAnalysed = predictions.length > 0;
 
-  /* Two separate summaries rather than one blended sentence. There is no model
-     here that combines them, so a single "case finding" line would be an
+  const cctaFindings = cctaResult?.findings || [];
+  const cctaLumen = cctaFindings[0] || null;
+  const cctaAnalysed = Boolean(cctaResult?.analyzed);
+  /* A truncated sliding window is the difference between "no lumen there" and
+     "that region was never examined", so it qualifies the headline instead of
+     sitting in a footnote. */
+  const cctaPartial = cctaAnalysed && cctaResult?.coverage?.complete === false;
+
+  /* Three separate summaries rather than one blended sentence. There is no
+     model here that combines them, so a single "case finding" line would be an
      inference this system never made. */
   const headline = [
+    cctaAnalysed
+      ? cctaLumen?.present
+        ? `CT lumen segmented — ${(cctaLumen.volume_ml ?? 0).toFixed(2)} mL marked${
+            cctaPartial ? " over a partial pass" : ""
+          }`
+        : `CT segmented — the mask fell below the presence threshold${
+            cctaPartial ? " on a partial pass" : ""
+          }`
+      : null,
     echoResult
       ? `echocardiography segmented — ${present.length} of ${foregroundCount} structures identified`
       : null,
@@ -2304,12 +2747,29 @@ function OverviewResult({
           <p>
             {headline.length > 0
               ? "Each modality is reported on its own. Nothing here combines " +
-                "them — there is no fusion model — and none of it is a " +
-                "diagnosis or a risk score."
-              : "Upload an echocardiography image or a 12-lead ECG to run one " +
-                "of the two trained models."}
+                "them — there is no learned fusion model — and none of it is " +
+                "a diagnosis or a risk score. The integrated report in " +
+                "section 05 aggregates them by software, and says so."
+              : "Upload a coronary CT volume, an echocardiography image or a " +
+                "12-lead ECG to run one of the three trained models."}
           </p>
         </div>
+
+        {cctaAnalysed && (
+          <div className="cv-summary-confidence">
+            <span>CT mean test Dice</span>
+
+            <strong>
+              {typeof cctaResult.model?.metrics?.test_dice?.mean === "number"
+                ? cctaResult.model.metrics.test_dice.mean.toFixed(3)
+                : "—"}
+            </strong>
+
+            {/* Three cases. Naming n here stops the number reading like a
+                validated operating characteristic. */}
+            <em>mean over 3 test cases — see the CCTA tab</em>
+          </div>
+        )}
 
         {echoResult && (
           <div className="cv-summary-confidence">
@@ -2338,12 +2798,18 @@ function OverviewResult({
 
       <div className="cv-metric-grid">
         <Metric
+          label="CT lumen segmentation"
+          value={
+            cctaAnalysed ? (cctaPartial ? "Partial pass" : "Complete") : "Not run"
+          }
+          tone={cctaAnalysed ? (cctaPartial ? "warning" : "") : "muted"}
+        />
+
+        <Metric
           label="Echo segmentation"
           value={echoResult ? "Complete" : "Not run"}
           tone={echoResult ? "" : "muted"}
         />
-
-        <Metric label="CCTA" value="No model" tone="muted" />
 
         <Metric
           label="ECG classification"
@@ -2355,6 +2821,44 @@ function OverviewResult({
       </div>
 
       <div className="cv-findings-grid">
+        {/* Geometry, labelled as geometry. A volume in millilitres is not a
+            stenosis grade, and the caption has to keep saying so. */}
+        {cctaAnalysed && (
+          <div className="cv-finding-card">
+            <span className="cv-card-kicker">CT lumen (geometry)</span>
+
+            {cctaFindings.length === 0 && (
+              <p className="cv-muted-text">
+                The model returned no lumen finding for this volume.
+              </p>
+            )}
+
+            {cctaFindings.map((finding) => (
+              <Finding
+                key={finding.name}
+                title={finding.name}
+                value={
+                  finding.present
+                    ? `${(finding.volume_ml ?? 0).toFixed(2)} mL · ${(
+                        finding.percent_of_analysed ?? 0
+                      ).toFixed(2)}% of analysed`
+                    : "Below presence threshold"
+                }
+                muted={!finding.present}
+              />
+            ))}
+
+            {cctaPartial && (
+              <p className="cv-muted-text">
+                Only{" "}
+                {(cctaResult.coverage?.analysed_percent ?? 0).toFixed(1)}% of
+                the volume was examined. The rest was not looked at, which is
+                not the same as nothing being there.
+              </p>
+            )}
+          </div>
+        )}
+
         <div className="cv-finding-card">
           <span className="cv-card-kicker">Segmentation findings</span>
 
@@ -2424,7 +2928,10 @@ function OverviewResult({
             <li>Echo image: {echoName || "none"}</li>
 
             <li>
-              CCTA: {files.ccta ? `${files.ccta.name} (not analysed)` : "none"}
+              CCTA:{" "}
+              {cctaName
+                ? `${cctaName}${cctaAnalysed ? "" : " (not analysed)"}`
+                : "none"}
             </li>
 
             <li>

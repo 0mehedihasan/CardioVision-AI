@@ -489,7 +489,10 @@ def _patient_block(patient: Optional[dict[str, Any]]) -> dict[str, Any]:
 
     return {
         "name": patient.get("name") or None,
-        "patient_id": patient.get("patientId") or None,
+        # The frontend form, the case payload and the SQLite row all spell this
+        # field `mrn`; `patientId` is accepted only so a payload written by an
+        # older client is not silently dropped.
+        "patient_id": patient.get("mrn") or patient.get("patientId") or None,
         "sex": patient.get("sex") or None,
         "date_of_birth": patient.get("dateOfBirth") or None,
         "study_date": patient.get("studyDate") or None,
@@ -527,6 +530,7 @@ def build_report(
         "schema_version": REPORT_SCHEMA_VERSION,
         "case_id": evidence.case_id,
         "generated_at": generated_at,
+        "generated_by": generated_by,
         "patient": _patient_block(patient),
         "modality_results": {
             key: evidence.modalities[key].to_dict()

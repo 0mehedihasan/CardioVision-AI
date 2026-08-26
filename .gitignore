@@ -47,6 +47,5 @@ models/medgemma-1.5-4b-it/
 #
 # data/.gitignore covers the database and per-case files. This entry keeps the
 # top level honest for anything else written there at runtime.
-data/*
 !data/.gitignore
 !data/sample/

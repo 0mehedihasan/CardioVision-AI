@@ -4656,6 +4656,529 @@
   white-space: nowrap;
 }
 
+/* ==================================================
+   CCTA RESULT
+
+   Deliberately almost styleless. The component is built from
+   the ECG block vocabulary and the echo image card, because a
+   third visual language for a third modality would make the
+   three results harder to compare, not easier. What follows is
+   only the spacing those two vocabularies do not already
+   provide when they are combined.
+   ================================================== */
+
+.cv-ccta-result {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-5);
+}
+
+/* Two stacked tab rows: which plane, then what to draw on it. Rendered
+   identically they read as one confusing eight-button strip, so the second
+   row is demoted to show it is subordinate to the first. */
+.cv-ccta-result .cv-echo-viewtabs + .cv-echo-viewtabs {
+  padding: var(--sp-1) var(--sp-3) 0;
+  background: var(--surface);
+}
+
+.cv-ccta-result .cv-echo-viewtabs + .cv-echo-viewtabs button {
+  padding: var(--sp-1) var(--sp-3) var(--sp-2);
+  font-size: 9.5px;
+}
+
+/* A CT slice is not square. `contain` inside the square frame letterboxes it
+   rather than cropping, which matters here: a cropped edge would remove
+   anatomy without saying so. */
+.cv-ccta-result .cv-echo-image-frame {
+  aspect-ratio: auto;
+  min-height: 340px;
+  max-height: 520px;
+}
+
+/* The per-slice coverage warning sits inside the image card, under the
+   caption for the slice it describes, so it cannot be read as applying to
+   the volume as a whole. */
+.cv-ccta-result .cv-echo-visual > .cv-ecg-note {
+  margin: 0 var(--sp-4) var(--sp-4);
+}
+
+/* Attention and output for the same slice, compared against each other —
+   so neither panel gets the larger column, and a run that produced only the
+   attention panel fills the row instead of leaving a hole beside it. */
+.cv-ccta-result .cv-xai-grid {
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+}
+
+.cv-ccta-result .cv-card-kicker + .cv-metric-grid,
+.cv-ccta-result .cv-card-kicker + .cv-model-grid,
+.cv-ccta-result .cv-card-kicker + .cv-xai-unavailable,
+.cv-ccta-result .cv-ecg-block-intro + .cv-metric-grid,
+.cv-ccta-result .cv-ecg-block-intro + .cv-model-grid,
+.cv-ccta-result .cv-ecg-block-intro + .cv-xai-grid,
+.cv-ccta-result .cv-xai-grid + .cv-metric-grid {
+  margin-top: var(--sp-4);
+}
+
+/* Eight measurements at four columns is unreadable below about a laptop
+   width; two columns keeps every figure on one line. */
+@media (max-width: 1180px) {
+  .cv-ccta-result .cv-metric-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 620px) {
+  .cv-ccta-result .cv-metric-grid,
+  .cv-ccta-result .cv-model-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* ==================================================
+   INTEGRATED REPORT
+
+   Same block vocabulary again. The report is the screen most
+   likely to be read as a diagnosis, so nothing here is styled
+   to look more authoritative than the modality results it is
+   assembled from.
+   ================================================== */
+
+.cv-report-result {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-5);
+}
+
+.cv-report-result .cv-card-kicker + .cv-model-grid,
+.cv-report-result .cv-card-kicker + .cv-xai-unavailable,
+.cv-report-result .cv-card-kicker + .cv-report-modalities,
+.cv-report-result .cv-card-kicker + .cv-report-summary,
+.cv-report-result .cv-ecg-block-intro + .cv-model-grid,
+.cv-report-result .cv-ecg-block-intro + .cv-report-observations,
+.cv-report-result .cv-ecg-block-intro + .cv-report-uncertainties {
+  margin-top: var(--sp-4);
+}
+
+/* --------------------------------------------------
+   NARRATIVE
+-------------------------------------------------- */
+
+.cv-report-summary {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+
+  max-width: 78ch;
+}
+
+.cv-report-summary p {
+  color: var(--text);
+  font-size: 12.5px;
+  line-height: 1.75;
+}
+
+/* The prompt is collapsed, not hidden: a reader who wants to check the
+   narrative against the evidence it was given can, without the raw context
+   dominating the page for everyone else. */
+.cv-report-prompt {
+  margin-top: var(--sp-4);
+  padding: var(--sp-3) var(--sp-4);
+
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--r-md);
+  background: var(--surface);
+}
+
+.cv-report-prompt summary {
+  cursor: pointer;
+
+  color: var(--accent-strong);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.03em;
+}
+
+.cv-report-prompt strong {
+  display: block;
+  margin-top: var(--sp-3);
+
+  color: var(--ink);
+  font-size: 10.5px;
+}
+
+.cv-report-prompt pre {
+  margin: var(--sp-3) 0 0;
+  max-height: 420px;
+  overflow: auto;
+
+  padding: var(--sp-3);
+
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--paper);
+
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* --------------------------------------------------
+   MODALITY STATUS
+-------------------------------------------------- */
+
+.cv-report-modalities {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--sp-3);
+}
+
+.cv-report-modality {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  min-width: 0;
+
+  padding: var(--sp-4);
+
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface);
+}
+
+.cv-report-modality-head {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: center;
+  justify-content: space-between;
+}
+
+.cv-report-modality-head strong {
+  color: var(--ink);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+/* Three shades for four statuses, and none of them is green-for-good.
+   "Analysed" means a model ran — it is not a verdict on the patient. */
+.cv-report-status {
+  flex-shrink: 0;
+  padding: 2px var(--sp-2);
+
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--paper);
+
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.cv-report-status.ok {
+  border-color: var(--accent-line);
+  background: var(--accent-tint);
+  color: var(--accent-strong);
+}
+
+.cv-report-status.warn {
+  border-color: #ecd4ac;
+  background: var(--warning-tint);
+  color: var(--warning);
+}
+
+.cv-report-status.none {
+  border-style: dashed;
+  color: var(--soft);
+}
+
+.cv-report-modality-meaning {
+  color: var(--muted);
+  font-size: 10.5px;
+  line-height: 1.6;
+}
+
+.cv-report-modality-task {
+  color: var(--soft);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  line-height: 1.55;
+}
+
+.cv-report-modality-warn {
+  padding: var(--sp-2);
+
+  border-left: 2px solid var(--warning);
+  border-radius: 0 var(--r-sm) var(--r-sm) 0;
+  background: var(--warning-tint);
+
+  color: var(--text);
+  font-size: 10px;
+  line-height: 1.6;
+}
+
+.cv-report-findings {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+
+  margin-top: auto;
+  padding-top: var(--sp-2);
+  border-top: 1px solid var(--line);
+}
+
+.cv-report-findings li {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.cv-report-findings li > span {
+  color: var(--ink);
+  font-size: 10.5px;
+}
+
+.cv-report-findings li > em {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-style: normal;
+}
+
+/* An unobserved finding is dimmed but never hidden. "Not observed" is a
+   result the reader needs to see, and hiding it would turn a reported
+   negative into a silence. */
+.cv-report-findings li.no > span,
+.cv-report-findings li.no > em {
+  color: var(--soft);
+}
+
+/* --------------------------------------------------
+   CROSS-MODAL OBSERVATIONS
+-------------------------------------------------- */
+
+.cv-report-observations {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.cv-report-observation {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+
+  padding: var(--sp-4);
+
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface);
+}
+
+.cv-report-observation-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  align-items: center;
+  justify-content: space-between;
+}
+
+.cv-report-observation-head strong {
+  color: var(--ink);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+/* Monospaced and literal, because it is a field value rather than a
+   sentence: two findings printed together is exactly where a causal
+   reading gets invented. */
+.cv-report-inference {
+  padding: 2px var(--sp-2);
+
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-sm);
+  background: var(--paper);
+
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.03em;
+}
+
+.cv-report-observation p {
+  max-width: 80ch;
+
+  color: var(--text);
+  font-size: 11.5px;
+  line-height: 1.7;
+}
+
+.cv-report-basis {
+  color: var(--soft);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  line-height: 1.6;
+}
+
+/* --------------------------------------------------
+   UNCERTAINTIES
+-------------------------------------------------- */
+
+.cv-report-uncertainties {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+/* The children carry their own top margins from the ECG vocabulary; the
+   flex gap above is the spacing that applies here. */
+.cv-report-uncertainties > .cv-ecg-note {
+  margin-top: 0;
+}
+
+/* --------------------------------------------------
+   CLINICAL CONTEXT LINES
+-------------------------------------------------- */
+
+.cv-report-context-line {
+  margin-top: var(--sp-3);
+  max-width: 80ch;
+
+  color: var(--text);
+  font-size: 11px;
+  line-height: 1.7;
+}
+
+.cv-report-context-line strong {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+/* --------------------------------------------------
+   NEXT STEPS
+-------------------------------------------------- */
+
+.cv-report-actions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+
+  margin-top: var(--sp-4);
+}
+
+.cv-report-actions li {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+
+  padding: var(--sp-3) var(--sp-4);
+
+  border: 1px solid var(--line);
+  border-left: 2px solid var(--line-strong);
+  border-radius: 0 var(--r-md) var(--r-md) 0;
+  background: var(--paper);
+}
+
+.cv-report-action-kind {
+  color: var(--soft);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.cv-report-actions li strong {
+  color: var(--ink);
+  font-size: 11.5px;
+  font-weight: 500;
+  line-height: 1.6;
+}
+
+.cv-report-actions li em {
+  color: var(--muted);
+  font-size: 10.5px;
+  font-style: normal;
+  line-height: 1.6;
+}
+
+/* --------------------------------------------------
+   MODEL VERSIONS
+-------------------------------------------------- */
+
+.cv-report-versions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+
+  margin-top: var(--sp-3);
+}
+
+.cv-report-versions li {
+  display: grid;
+  grid-template-columns: 70px minmax(0, 1fr);
+  gap: var(--sp-1) var(--sp-3);
+  align-items: baseline;
+
+  padding-bottom: var(--sp-2);
+  border-bottom: 1px solid var(--line);
+}
+
+.cv-report-versions li:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.cv-report-versions li > span {
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.cv-report-versions li > strong {
+  color: var(--ink);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.cv-report-versions li > em {
+  grid-column: 2;
+
+  color: var(--muted);
+  font-size: 10px;
+  font-style: normal;
+  line-height: 1.6;
+}
+
+@media (max-width: 1180px) {
+  .cv-report-modalities {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 720px) {
+  .cv-report-modalities {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .cv-report-result .cv-model-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .cv-report-versions li {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .cv-report-versions li > em {
+    grid-column: 1;
+  }
+}
+
 /* --------------------------------------------------
    RESPONSIVE — ECG result
 -------------------------------------------------- */

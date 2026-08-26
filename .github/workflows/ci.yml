@@ -66,6 +66,12 @@ jobs:
       - name: Case lifecycle and storage
         run: python tests/test_case_lifecycle.py
 
+      - name: Evidence layer and integrated report
+        run: python tests/test_report_evidence.py
+
+      - name: CCTA preprocessing and window geometry
+        run: python tests/test_ccta_pipeline.py
+
       - name: ECG architecture vs checkpoint
         run: python tests/test_ecg_architecture.py
 
@@ -79,7 +85,7 @@ jobs:
         run: python tests/test_ecg_reporting.py
 
       # The documented `pytest` route, exercised so it cannot rot. It runs the
-      # same five scripts as subprocesses, so this step is a check on the wrapper
+      # same scripts as subprocesses, so this step is a check on the wrapper
       # and the pyproject collection settings rather than on the suites.
       - name: pytest wrapper
         run: pytest -q

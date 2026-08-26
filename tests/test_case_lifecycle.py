@@ -916,9 +916,25 @@ check(
     "Electrocardiography: not available" not in ecg_text,
 )
 check(
-    "but the untrained modalities still are",
-    "Coronary CT angiography: not available" in ecg_text
-    and "Multimodal fusion: not available" in ecg_text,
+    "but the modalities that never got a model still are",
+    "Multimodal fusion: not available" in ecg_text
+    and "Clinical risk" in ecg_text,
+)
+# CCTA acquired a trained model, so "not available" would now be a lie about
+# the system. What must survive is the distinction between "no model" and
+# "model exists, nothing analysed" — the second still forbids CT findings.
+check(
+    "CCTA is no longer listed as a modality without a model",
+    "Coronary CT angiography: not available" not in ecg_text,
+)
+check(
+    "and is instead described as available but unanalysed in this case",
+    "a CT lumen segmentation model is " in ecg_text
+    and "no CT volume has been analysed in this case" in ecg_text,
+)
+check(
+    "which still forbids inventing coronary findings",
+    "Do not infer coronary anatomy" in ecg_text,
 )
 check(
     "and the missing echo is still called out",
@@ -1066,7 +1082,7 @@ check(
 )
 check(
     "the results panel opens off the results themselves, not a stored flag",
-    "const analysisComplete = Boolean(echoResult) || Boolean(ecgResult)" in app
+    "Boolean(echoResult) || Boolean(ecgResult) || Boolean(cctaResult)" in app
     and "setAnalysisComplete" not in app,
 )
 check(
